@@ -1724,9 +1724,21 @@ def _filter_excluded_attachments(rows: List[Dict[str, Any]]) -> List[Dict[str, A
 
 
 def _shape_attachment(row: Dict[str, Any]) -> Dict[str, Any]:
-    """Convert a raw join row into the public metadata shape."""
+    """Convert a raw join row into the public metadata shape.
+
+    chat.db's ``total_bytes`` is unreliable — many rows store a stale or
+    rounded value (e.g. 1048576 for files that are actually 8MB). When the
+    file is on disk we trust ``os.path.getsize`` instead.
+    """
     path = _resolve_attachment_path(row.get("filename"))
     exists = bool(path) and os.path.exists(path)
+    if exists:
+        try:
+            size_bytes = os.path.getsize(path)
+        except OSError:
+            size_bytes = row.get("total_bytes") or 0
+    else:
+        size_bytes = row.get("total_bytes") or 0
     return {
         "id": row["attachment_id"],
         "message_id": row["message_id"],
@@ -1734,7 +1746,7 @@ def _shape_attachment(row: Dict[str, Any]) -> Dict[str, Any]:
         "path": path,
         "mime_type": row.get("mime_type"),
         "uti": row.get("uti"),
-        "size_bytes": row.get("total_bytes") or 0,
+        "size_bytes": size_bytes,
         "exists": exists,
     }
 
