@@ -13,6 +13,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from mcp.server.fastmcp import Image
 from thefuzz import fuzz
 
 
@@ -962,7 +963,11 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
     
     # Get chat mapping for group chat names
     chat_mapping = get_chat_mapping()
-    
+
+    # Bulk-fetch attachments for all message ROWIDs in one query (Tier 1 progressive disclosure).
+    visible_ids = [msg["ROWID"] for msg in messages if msg.get("ROWID") is not None]
+    attachments_by_msg = _attachments_for_message_ids(visible_ids)
+
     formatted_messages = []
     for msg in messages:
         # Get the message content from text or attributedBody
@@ -976,7 +981,7 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
         else:
             # Skip empty messages
             continue
-        
+
         # Convert Apple timestamp to readable date
         try:
             apple_epoch_offset = 978307200  # Seconds between Unix epoch and Apple epoch (2001-01-01 UTC)
@@ -995,20 +1000,23 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
             # If conversion fails, use a placeholder
             date_str = "Unknown date"
             print(f"Date conversion error: {e} for timestamp {msg['date']}")
-        
+
         direction = "You" if msg["is_from_me"] else get_contact_name(msg["handle_id"])
-        
+
         # Check if this is a group chat
         group_chat_name = None
         if msg.get('cache_roomnames'):
             group_chat_name = chat_mapping.get(msg['cache_roomnames'])
-        
+
         message_prefix = f"[{date_str}]"
         if group_chat_name:
             message_prefix += f" [{group_chat_name}]"
-        
+
+        attachment_summary = _format_attachment_summary(
+            attachments_by_msg.get(msg["ROWID"], [])
+        )
         formatted_messages.append(
-            f"{message_prefix} {direction}: {body}"
+            f"{message_prefix} {direction}: {body}{attachment_summary}"
         )
     
     if not formatted_messages:
@@ -1162,6 +1170,13 @@ def fuzzy_search_messages(
     truncated = len(raw_messages) >= _FUZZY_SEARCH_SOFT_CAP
 
     chat_mapping = get_chat_mapping()
+
+    # Bulk-fetch attachments for all matched message ROWIDs (Tier 1 progressive disclosure).
+    matched_ids = [
+        m[1]["ROWID"] for m in matched_messages_with_scores if m[1].get("ROWID") is not None
+    ]
+    attachments_by_msg = _attachments_for_message_ids(matched_ids)
+
     formatted_results = []
     for _matched_text, msg_dict, score in matched_messages_with_scores:
         original_body = (
@@ -1196,7 +1211,12 @@ def fuzzy_search_messages(
         message_prefix = f"[{date_str}] (Score: {score:.2f})" + (
             f" [{group_chat_name}]" if group_chat_name else ""
         )
-        formatted_results.append(f"{message_prefix} {direction}: {original_body}")
+        attachment_summary = _format_attachment_summary(
+            attachments_by_msg.get(msg_dict.get("ROWID"), [])
+        )
+        formatted_results.append(
+            f"{message_prefix} {direction}: {original_body}{attachment_summary}"
+        )
 
     header = f"Found {len(matched_messages_with_scores)} messages matching '{search_term}':\n"
     if truncated:
@@ -1640,7 +1660,389 @@ def check_addressbook_access() -> str:
             status.append(f"Successfully retrieved {len(contacts)} contacts with phone numbers")
         else:
             status.append("WARNING: No contacts with phone numbers found. PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE.")
-        
+
         return "\n".join(status)
     except Exception as e:
         return f"ERROR: Unexpected error during database access check: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
+
+
+# ---------------------------------------------------------------------------
+# Attachments
+# ---------------------------------------------------------------------------
+
+# UTI prefix that flags the iMessage app extension "balloon" payload format.
+# These are container blobs (Apple Pay, polls, link previews, etc.) — not
+# user-visible files, and parsing them is out of scope.
+_PLUGIN_PAYLOAD_UTI_PREFIX = "com.apple.messages.MSMessageExtensionBalloonPlugin"
+
+# MIME types we surface as inline image content rather than path metadata.
+_INLINE_IMAGE_MIMES = {
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "image/heic",
+    "image/heif",
+}
+
+# Default cap on bytes returned inline. Above this we fall back to path
+# metadata so we don't blow context on a 50MB video the model didn't ask for.
+_DEFAULT_MAX_INLINE_BYTES = 5_000_000
+
+_APPLE_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
+
+
+def _to_apple_ns(dt: datetime) -> int:
+    """Convert a UTC datetime to Apple's nanoseconds-since-2001 format."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int((dt - _APPLE_EPOCH).total_seconds() * 1_000_000_000)
+
+
+def _resolve_attachment_path(filename: Optional[str]) -> Optional[str]:
+    """Expand ~ and return an absolute path. Returns None for empty input."""
+    if not filename:
+        return None
+    return os.path.expanduser(filename)
+
+
+def _filter_excluded_attachments(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Drop stickers and plugin-payload rows. Keeps everything else."""
+    kept = []
+    for row in rows:
+        if row.get("is_sticker"):
+            continue
+        uti = row.get("uti") or ""
+        if uti.startswith(_PLUGIN_PAYLOAD_UTI_PREFIX):
+            continue
+        transfer_name = row.get("transfer_name") or ""
+        if transfer_name.endswith(".pluginPayloadAttachment"):
+            continue
+        kept.append(row)
+    return kept
+
+
+def _shape_attachment(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert a raw join row into the public metadata shape."""
+    path = _resolve_attachment_path(row.get("filename"))
+    exists = bool(path) and os.path.exists(path)
+    return {
+        "id": row["attachment_id"],
+        "message_id": row["message_id"],
+        "filename": row.get("transfer_name") or (os.path.basename(path) if path else None),
+        "path": path,
+        "mime_type": row.get("mime_type"),
+        "uti": row.get("uti"),
+        "size_bytes": row.get("total_bytes") or 0,
+        "exists": exists,
+    }
+
+
+_ATTACHMENT_SELECT_COLS = """
+    a.ROWID AS attachment_id,
+    maj.message_id AS message_id,
+    a.filename AS filename,
+    a.transfer_name AS transfer_name,
+    a.mime_type AS mime_type,
+    a.uti AS uti,
+    a.total_bytes AS total_bytes,
+    a.is_sticker AS is_sticker,
+    a.hide_attachment AS hide_attachment,
+    a.created_date AS created_date
+"""
+
+
+def _format_attachment_summary(attachments: List[Dict[str, Any]]) -> str:
+    """Compact one-line summary of a message's attachments — Tier 1 disclosure.
+
+    Returns "" when the list is empty so callers can unconditionally append.
+    The format keeps tokens low: id + mime_type per item, with the original
+    filename only when distinct enough to be useful (small filenames help the
+    agent disambiguate; we drop them past 3 attachments to cap the line).
+    """
+    if not attachments:
+        return ""
+    parts = []
+    for att in attachments:
+        mime = att.get("mime_type") or "?"
+        # Filename helps when an agent is choosing between several attachments
+        # on the same message; cap at 3 to keep the line short.
+        if len(attachments) <= 3 and att.get("filename"):
+            parts.append(f"#{att['id']} {mime} ({att['filename']})")
+        else:
+            parts.append(f"#{att['id']} {mime}")
+    return f" [attachments: {', '.join(parts)}]"
+
+
+def _attachments_for_message_ids(
+    message_ids: List[int],
+) -> Dict[int, List[Dict[str, Any]]]:
+    """For a list of message ROWIDs, return a dict mapping each message id
+    that has attachments to a list of attachment metadata dicts. Messages
+    with no surviving (post-filter) attachments are absent from the dict."""
+    if not message_ids:
+        return {}
+
+    placeholders = ",".join(["?"] * len(message_ids))
+    query = f"""
+        SELECT
+            {_ATTACHMENT_SELECT_COLS},
+            m.is_from_me AS is_from_me,
+            m.handle_id AS handle_id
+        FROM message_attachment_join maj
+        JOIN attachment a ON a.ROWID = maj.attachment_id
+        JOIN message m ON m.ROWID = maj.message_id
+        WHERE maj.message_id IN ({placeholders})
+        ORDER BY a.ROWID ASC
+    """
+    rows = query_messages_db(query, tuple(message_ids))
+    if rows and "error" in rows[0]:
+        return {}
+
+    # Defensive: only process rows that look like attachment-join rows. In
+    # tests where the same query_messages_db mock is used for multiple queries
+    # the returned rows may be from a different query; ignore those.
+    rows = [r for r in rows if "attachment_id" in r and "message_id" in r]
+    rows = _filter_excluded_attachments(rows)
+
+    grouped: Dict[int, List[Dict[str, Any]]] = {}
+    for row in rows:
+        shaped = _shape_attachment(row)
+        grouped.setdefault(row["message_id"], []).append(shaped)
+    return grouped
+
+
+def search_attachments(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    contact: Optional[str] = None,
+    mime_type: Optional[str] = None,
+    limit: int = 50,
+) -> str:
+    """
+    Search attachments across all messages by date range, contact, and MIME type.
+
+    Returns metadata only — no file bytes. Use ``get_attachment(id)`` to fetch
+    a specific file.
+
+    Args:
+        start_date: Inclusive ISO date "YYYY-MM-DD" (UTC). Optional.
+        end_date: Inclusive ISO date "YYYY-MM-DD" (UTC). Optional.
+        contact: Phone number, email, or contact name. Optional.
+        mime_type: Prefix match e.g. "image/" or "application/pdf". Optional.
+        limit: Maximum results to return (default 50).
+    """
+    if limit <= 0:
+        return "Error: limit must be positive."
+
+    where_clauses = []
+    params: List[Any] = []
+
+    if start_date:
+        try:
+            dt = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return f"Error: start_date must be YYYY-MM-DD, got '{start_date}'."
+        where_clauses.append("CAST(m.date AS INTEGER) >= ?")
+        params.append(_to_apple_ns(dt))
+
+    if end_date:
+        try:
+            dt = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return f"Error: end_date must be YYYY-MM-DD, got '{end_date}'."
+        # Inclusive: end of day
+        dt_end = dt + timedelta(days=1)
+        where_clauses.append("CAST(m.date AS INTEGER) < ?")
+        params.append(_to_apple_ns(dt_end))
+
+    if mime_type:
+        # Caller can pass "image/" (prefix) or "image/jpeg" (exact). LIKE handles both.
+        like_pattern = mime_type if "%" in mime_type else f"{mime_type}%"
+        where_clauses.append("a.mime_type LIKE ?")
+        params.append(like_pattern)
+
+    handle_ids: Optional[List[int]] = None
+    if contact:
+        contact = str(contact).strip()
+        # Reuse the same resolution logic the existing tools use, minus the
+        # interactive contact:N selection (this is a non-interactive search tool).
+        if "@" in contact:
+            results = query_messages_db(
+                "SELECT ROWID FROM handle WHERE id = ?", (contact,)
+            )
+            if results and "error" not in results[0]:
+                handle_ids = [r["ROWID"] for r in results]
+        elif any(c.isdigit() for c in contact):
+            handle_ids = find_handles_by_phone(contact)
+        else:
+            matches = find_contact_by_name(contact)
+            if matches:
+                resolved_handles = []
+                for m in matches:
+                    h = find_handles_by_phone(m["phone"]) or []
+                    resolved_handles.extend(h)
+                handle_ids = resolved_handles or None
+        if not handle_ids:
+            return f"No handles found for contact '{contact}'."
+        placeholders = ",".join(["?"] * len(handle_ids))
+        where_clauses.append(f"m.handle_id IN ({placeholders})")
+        params.extend(handle_ids)
+
+    where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+
+    query = f"""
+        SELECT
+            {_ATTACHMENT_SELECT_COLS},
+            m.date AS message_date,
+            m.is_from_me AS is_from_me,
+            m.handle_id AS handle_id
+        FROM message_attachment_join maj
+        JOIN attachment a ON a.ROWID = maj.attachment_id
+        JOIN message m ON m.ROWID = maj.message_id
+        {where_sql}
+        ORDER BY m.date DESC
+        LIMIT ?
+    """
+    # Pull a few extra rows so post-filter we can still hit `limit` cleanly.
+    fetch_limit = limit * 3
+    rows = query_messages_db(query, tuple(params + [fetch_limit]))
+
+    if rows and "error" in rows[0]:
+        return f"Error querying attachments: {rows[0]['error']}"
+
+    rows = _filter_excluded_attachments(rows)
+    rows = rows[:limit]
+
+    if not rows:
+        return "No attachments found matching the given filters."
+
+    lines = [f"Found {len(rows)} attachment(s):"]
+    for row in rows:
+        shaped = _shape_attachment(row)
+        try:
+            ts_ns = int(row["message_date"])
+            dt = _APPLE_EPOCH + timedelta(seconds=ts_ns / 1_000_000_000)
+            date_str = dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError, OverflowError):
+            date_str = "Unknown date"
+        sender = "You" if row.get("is_from_me") else get_contact_name(row.get("handle_id"))
+        size_kb = (shaped["size_bytes"] or 0) / 1024
+        marker = "" if shaped["exists"] else " [missing on disk]"
+        lines.append(
+            f"- id={shaped['id']} msg={shaped['message_id']} "
+            f"[{date_str}] from {sender} | "
+            f"{shaped['mime_type'] or 'unknown'} | "
+            f"{shaped['filename'] or '(no name)'} | "
+            f"{size_kb:.1f} KB{marker}"
+        )
+
+    lines.append("")
+    lines.append(
+        "Use tool_get_attachment(attachment_id=<id>) to fetch a specific file."
+    )
+    return "\n".join(lines)
+
+
+def _heic_to_png_bytes(heic_bytes: bytes) -> Optional[bytes]:
+    """Convert HEIC bytes to PNG bytes. Returns None if conversion isn't available
+    on this machine (pillow-heif not installed or libheif missing)."""
+    try:
+        import io
+
+        import pillow_heif  # type: ignore
+        from PIL import Image as PILImage  # type: ignore
+
+        pillow_heif.register_heif_opener()
+        img = PILImage.open(io.BytesIO(heic_bytes))
+        out = io.BytesIO()
+        img.save(out, format="PNG")
+        return out.getvalue()
+    except Exception:
+        return None
+
+
+def get_attachment(
+    attachment_id: int,
+    max_bytes: int = _DEFAULT_MAX_INLINE_BYTES,
+):
+    """
+    Fetch a specific attachment by its ROWID.
+
+    Returns:
+        - mcp.server.fastmcp.Image for image MIME types under ``max_bytes``
+          (HEIC is converted to PNG inline if pillow-heif is available)
+        - A string with path + metadata for non-image types, missing files,
+          and oversized images (so the agent can decide whether to read them
+          via filesystem tools)
+    """
+    rows = query_messages_db(
+        f"""
+        SELECT
+            {_ATTACHMENT_SELECT_COLS},
+            m.is_from_me AS is_from_me,
+            m.handle_id AS handle_id
+        FROM message_attachment_join maj
+        JOIN attachment a ON a.ROWID = maj.attachment_id
+        JOIN message m ON m.ROWID = maj.message_id
+        WHERE a.ROWID = ?
+        LIMIT 1
+        """,
+        (attachment_id,),
+    )
+
+    if rows and "error" in rows[0]:
+        return f"Error querying attachment: {rows[0]['error']}"
+    if not rows:
+        return f"Attachment {attachment_id} not found."
+
+    row = rows[0]
+    shaped = _shape_attachment(row)
+    path = shaped["path"]
+    mime = (shaped["mime_type"] or "").lower()
+
+    if not path:
+        return f"Attachment {attachment_id}: no filename recorded in database."
+
+    if not os.path.exists(path):
+        return (
+            f"Attachment {attachment_id} ({shaped['filename']}, {mime or 'unknown'}): "
+            f"missing on disk at {path}"
+        )
+
+    # Non-image: return path metadata for the caller to read with their own tools.
+    if mime not in _INLINE_IMAGE_MIMES:
+        size_kb = (shaped["size_bytes"] or os.path.getsize(path)) / 1024
+        return (
+            f"Attachment {attachment_id}: {mime or 'unknown'} | "
+            f"{shaped['filename']} | {size_kb:.1f} KB | path: {path}\n"
+            f"This is not an image. Use your filesystem read tools on the path above."
+        )
+
+    # Oversize image: fall back to path metadata.
+    actual_size = os.path.getsize(path)
+    if actual_size > max_bytes:
+        return (
+            f"Attachment {attachment_id}: image of {actual_size / 1024:.0f} KB exceeds "
+            f"max_bytes={max_bytes}. {shaped['filename']} | path: {path}\n"
+            f"Increase max_bytes or read the file directly."
+        )
+
+    with open(path, "rb") as f:
+        raw = f.read()
+
+    if mime in {"image/heic", "image/heif"}:
+        png = _heic_to_png_bytes(raw)
+        if png is None:
+            return (
+                f"Attachment {attachment_id}: HEIC image but pillow-heif is not "
+                f"available for conversion. {shaped['filename']} | path: {path}\n"
+                f"Install pillow-heif or read the file directly."
+            )
+        return Image(data=png, format="png")
+
+    fmt = mime.split("/", 1)[1] if "/" in mime else "png"
+    if fmt == "jpg":
+        fmt = "jpeg"
+    return Image(data=raw, format=fmt)
