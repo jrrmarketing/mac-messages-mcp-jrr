@@ -910,20 +910,9 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
                 return f"Could not find any messages with contact '{contact}'. Verify the phone number or email is correct."
     
     # Calculate the timestamp for X hours ago
-    current_time = datetime.now(timezone.utc)
-    hours_ago = current_time - timedelta(hours=hours)
-    
-    # Convert to Apple's timestamp format (nanoseconds since 2001-01-01)
-    # Apple's Core Data uses nanoseconds, not seconds
-    apple_epoch = datetime(2001, 1, 1, tzinfo=timezone.utc)
-    seconds_since_apple_epoch = (hours_ago - apple_epoch).total_seconds()
-    
-    # Convert to nanoseconds (Apple's format)
-    nanoseconds_since_apple_epoch = int(seconds_since_apple_epoch * 1_000_000_000)
-    
-    # Make sure we're using a string representation for the timestamp
-    # to avoid integer overflow issues when binding to SQLite
-    timestamp_str = str(nanoseconds_since_apple_epoch)
+    hours_ago = datetime.now(timezone.utc) - timedelta(hours=hours)
+    # String-bind the Apple-ns timestamp to avoid SQLite integer overflow.
+    timestamp_str = str(_to_apple_ns(hours_ago))
     
     # Build the SQL query - use attributedBody field and text
     query = """
@@ -984,17 +973,7 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
 
         # Convert Apple timestamp to readable date
         try:
-            apple_epoch_offset = 978307200  # Seconds between Unix epoch and Apple epoch (2001-01-01 UTC)
-
-            # Handle both nanosecond and second format timestamps
-            msg_timestamp = int(msg["date"])
-            msg_timestamp_s = (
-                msg_timestamp / 1_000_000_000
-                if len(str(msg_timestamp)) > 10
-                else msg_timestamp
-            )
-
-            date_val = datetime.fromtimestamp(msg_timestamp_s + apple_epoch_offset, tz=timezone.utc)
+            date_val = _from_apple_ns(int(msg["date"]))
             date_str = date_val.astimezone().strftime("%Y-%m-%d %H:%M:%S")
         except (ValueError, TypeError, OverflowError) as e:
             # If conversion fails, use a placeholder
@@ -1085,15 +1064,9 @@ def fuzzy_search_messages(
     if hours == 0:
         time_desc = "all time"
     else:
-        # Calculate the timestamp for X hours ago
-        current_time = datetime.now(timezone.utc)
-        hours_ago_dt = current_time - timedelta(hours=hours)
-        apple_epoch = datetime(2001, 1, 1, tzinfo=timezone.utc)
-        seconds_since_apple_epoch = (hours_ago_dt - apple_epoch).total_seconds()
-
-        # Convert to nanoseconds (Apple's format)
-        nanoseconds_since_apple_epoch = int(seconds_since_apple_epoch * 1_000_000_000)
-        timestamp_str = str(nanoseconds_since_apple_epoch)
+        hours_ago_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
+        # String-bind the Apple-ns timestamp to avoid SQLite integer overflow.
+        timestamp_str = str(_to_apple_ns(hours_ago_dt))
 
         where_clauses.insert(0, "CAST(m.date AS TEXT) > ?")
         params_list.insert(0, timestamp_str)
@@ -1185,19 +1158,7 @@ def fuzzy_search_messages(
             or "[No displayable content]"
         )
 
-        apple_offset = (
-            978307200  # Seconds between Unix epoch and Apple epoch (2001-01-01)
-        )
-        msg_timestamp_ns = int(msg_dict["date"])
-        # Ensure timestamp is in seconds for fromtimestamp
-        msg_timestamp_s = (
-            msg_timestamp_ns / 1_000_000_000
-            if len(str(msg_timestamp_ns)) > 10
-            else msg_timestamp_ns
-        )
-        date_val = datetime.fromtimestamp(
-            msg_timestamp_s + apple_offset, tz=timezone.utc
-        )
+        date_val = _from_apple_ns(int(msg_dict["date"]))
         date_str = date_val.astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
         direction = (
@@ -1700,6 +1661,17 @@ def _to_apple_ns(dt: datetime) -> int:
     return int((dt - _APPLE_EPOCH).total_seconds() * 1_000_000_000)
 
 
+def _from_apple_ns(ts: int) -> datetime:
+    """Convert an Apple-epoch ``message.date`` value to a UTC datetime.
+
+    Older chat.db rows store seconds-since-2001 (10 or fewer digits in the
+    integer); newer macOS versions store nanoseconds (more than 10 digits).
+    Both are handled here so callers don't repeat the heuristic.
+    """
+    seconds = ts / 1_000_000_000 if len(str(ts)) > 10 else ts
+    return _APPLE_EPOCH + timedelta(seconds=seconds)
+
+
 def _resolve_attachment_path(filename: Optional[str]) -> Optional[str]:
     """Expand ~ and return an absolute path. Returns None for empty input."""
     if not filename:
@@ -1934,9 +1906,7 @@ def search_attachments(
     for row in rows:
         shaped = _shape_attachment(row)
         try:
-            ts_ns = int(row["message_date"])
-            dt = _APPLE_EPOCH + timedelta(seconds=ts_ns / 1_000_000_000)
-            date_str = dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+            date_str = _from_apple_ns(int(row["message_date"])).astimezone().strftime("%Y-%m-%d %H:%M:%S")
         except (ValueError, TypeError, OverflowError):
             date_str = "Unknown date"
         sender = "You" if row.get("is_from_me") else get_contact_name(row.get("handle_id"))
