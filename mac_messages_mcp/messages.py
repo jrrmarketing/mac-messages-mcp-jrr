@@ -1784,9 +1784,11 @@ def _attachments_for_message_ids(
     if rows and "error" in rows[0]:
         return {}
 
-    # Defensive: only process rows that look like attachment-join rows. In
-    # tests where the same query_messages_db mock is used for multiple queries
-    # the returned rows may be from a different query; ignore those.
+    # Drop rows that don't look like attachment-join rows. Two reasons to
+    # keep this guard: (1) in tests where a single query_messages_db mock
+    # serves multiple queries, foreign rows would crash _shape_attachment;
+    # (2) in production, a future schema change that adds an extra column
+    # or strips one would degrade gracefully rather than break the tool.
     rows = [r for r in rows if "attachment_id" in r and "message_id" in r]
     rows = _filter_excluded_attachments(rows)
 
