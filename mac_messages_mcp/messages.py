@@ -1982,12 +1982,19 @@ def get_attachment(
     """
     Fetch a specific attachment by its ROWID.
 
+    Always returns the resolved filesystem path so the human (or agent's
+    filesystem tools) can act on the file directly — share it, save it,
+    re-encode, attach elsewhere. Inline image bytes are a *bonus* added
+    when the file is a supported image MIME type and fits under
+    ``max_bytes``.
+
     Returns:
-        - mcp.server.fastmcp.Image for image MIME types under ``max_bytes``
-          (HEIC is converted to PNG inline if pillow-heif is available)
-        - A string with path + metadata for non-image types, missing files,
-          and oversized images (so the agent can decide whether to read them
-          via filesystem tools)
+        - ``[metadata_text, Image]`` (list) for image MIME types under
+          ``max_bytes`` (HEIC is converted to PNG inline if pillow-heif
+          is available). The text always includes the absolute path.
+        - ``str`` (metadata text only) for non-image types, missing files,
+          oversized images, HEIC without pillow-heif, missing rows, and DB
+          errors.
     """
     rows = query_messages_db(
         f"""
@@ -2023,22 +2030,27 @@ def get_attachment(
             f"missing on disk at {path}"
         )
 
-    # Non-image: return path metadata for the caller to read with their own tools.
+    size_kb = (shaped["size_bytes"] or os.path.getsize(path)) / 1024
+    metadata_text = (
+        f"Attachment {attachment_id}: {mime or 'unknown'} | "
+        f"{shaped['filename']} | {size_kb:.1f} KB | path: {path}"
+    )
+
+    # Non-image: path-only return so the caller can read with their own tools.
     if mime not in _INLINE_IMAGE_MIMES:
-        size_kb = (shaped["size_bytes"] or os.path.getsize(path)) / 1024
         return (
-            f"Attachment {attachment_id}: {mime or 'unknown'} | "
-            f"{shaped['filename']} | {size_kb:.1f} KB | path: {path}\n"
+            f"{metadata_text}\n"
             f"This is not an image. Use your filesystem read tools on the path above."
         )
 
-    # Oversize image: fall back to path metadata.
+    # Oversize image: path-only, no inline bytes.
     actual_size = os.path.getsize(path)
     if actual_size > max_bytes:
         return (
-            f"Attachment {attachment_id}: image of {actual_size / 1024:.0f} KB exceeds "
-            f"max_bytes={max_bytes}. {shaped['filename']} | path: {path}\n"
-            f"Increase max_bytes or read the file directly."
+            f"{metadata_text}\n"
+            f"Image of {actual_size / 1024:.0f} KB exceeds max_bytes={max_bytes} — "
+            f"inline render skipped. Read the file directly from path above, "
+            f"or call again with a larger max_bytes."
         )
 
     with open(path, "rb") as f:
@@ -2048,13 +2060,13 @@ def get_attachment(
         png = _heic_to_png_bytes(raw)
         if png is None:
             return (
-                f"Attachment {attachment_id}: HEIC image but pillow-heif is not "
-                f"available for conversion. {shaped['filename']} | path: {path}\n"
-                f"Install pillow-heif or read the file directly."
+                f"{metadata_text}\n"
+                f"HEIC image but pillow-heif is not available for conversion. "
+                f"Install pillow-heif or read the file directly from path above."
             )
-        return Image(data=png, format="png")
+        return [metadata_text, Image(data=png, format="png")]
 
     fmt = mime.split("/", 1)[1] if "/" in mime else "png"
     if fmt == "jpg":
         fmt = "jpeg"
-    return Image(data=raw, format=fmt)
+    return [metadata_text, Image(data=raw, format=fmt)]

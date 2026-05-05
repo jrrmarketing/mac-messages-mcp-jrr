@@ -251,14 +251,18 @@ class TestGetAttachment(unittest.TestCase):
             total_bytes=10_000_000,
         )]
         result = get_attachment(42, max_bytes=5_000_000)
+        # Path-only string return (no inline bytes), but path must still be there
         self.assertIsInstance(result, str)
         self.assertIn("max_bytes", result.lower())
         self.assertIn("big.jpg", result)
+        self.assertIn("path:", result)
+        self.assertIn("/Library/Messages/Attachments/", result)
 
     @patch("mac_messages_mcp.messages.os.path.getsize", return_value=200)
     @patch("mac_messages_mcp.messages.os.path.exists", return_value=True)
     @patch("mac_messages_mcp.messages.query_messages_db")
-    def test_jpeg_returns_image_object(self, mock_query, _exists, _size):
+    def test_jpeg_returns_path_and_image(self, mock_query, _exists, _size):
+        """Always-path contract: inline image returns BOTH path metadata AND inline bytes."""
         # One-pixel valid JPEG
         jpeg_bytes = bytes.fromhex(
             "ffd8ffe000104a46494600010100000100010000ffdb0043000806060706050806070707"
@@ -274,9 +278,18 @@ class TestGetAttachment(unittest.TestCase):
                 total_bytes=200,
             )]
             result = get_attachment(42)
-        # Should be a FastMCP Image, not a string
+        # Returns a list: [metadata_text, Image]
         from mcp.server.fastmcp import Image
-        self.assertIsInstance(result, Image)
+        self.assertIsInstance(result, list)
+        self.assertEqual(len(result), 2)
+        text = next((x for x in result if isinstance(x, str)), None)
+        img = next((x for x in result if isinstance(x, Image)), None)
+        self.assertIsNotNone(text, "Expected path metadata string in result")
+        self.assertIsNotNone(img, "Expected inline Image in result")
+        # The path must be present in the text so the human can act on the file
+        self.assertIn("path:", text)
+        self.assertIn("photo.jpg", text)
+        self.assertIn("/Library/Messages/Attachments/", text)
 
 
 class TestFormatAttachmentSummary(unittest.TestCase):
