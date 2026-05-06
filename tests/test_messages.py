@@ -9,6 +9,7 @@ import sqlite3
 import tempfile
 
 from mac_messages_mcp.messages import (
+    _sanitize_message_body,
     _send_message_to_recipient,
     escape_applescript,
     extract_body_from_attributed,
@@ -128,6 +129,20 @@ class TestEscapeAppleScriptInjection(unittest.TestCase):
 
         # Check results
         self.assertEqual(result, 'Hello 世界')
+
+
+class TestSanitizeMessageBody(unittest.TestCase):
+    """Tests for MCP-safe message rendering."""
+
+    def test_control_characters_are_removed(self):
+        self.assertEqual(_sanitize_message_body("hello\x00there\x07"), "hello there ")
+
+    def test_newlines_are_rendered_inline(self):
+        self.assertEqual(_sanitize_message_body("line 1\nline 2"), "line 1\\nline 2")
+
+    def test_long_messages_are_truncated(self):
+        result = _sanitize_message_body("abcdef", max_chars=3)
+        self.assertEqual(result, "abc... [truncated 3 chars]")
 
 
 class TestSendMessageToRecipient(unittest.TestCase):

@@ -82,6 +82,21 @@ To grant Full Disk Access:
 
 ### Claude Desktop Integration
 
+#### Option 1: Claude Desktop Extension
+
+This repo includes an MCPB-compatible `manifest.json` for Claude Desktop's one-click extension flow.
+
+```bash
+yarn global add @anthropic-ai/mcpb
+mcpb pack
+```
+
+Install the generated `.mcpb` file from Claude Desktop **Settings** > **Extensions** > **Advanced settings** > **Install Extension...**.
+
+Claude Desktop, or the terminal used to package/run the extension, still needs Full Disk Access to read Messages.
+
+#### Option 2: Manual Config
+
 1. Go to **Claude** > **Settings** > **Developer** > **Edit Config** > **claude_desktop_config.json**
 2. Add the following configuration:
 
@@ -117,6 +132,14 @@ uvx mac-messages-mcp
 ### Docker Container Integration
 
 If you need to connect to `mac-messages-mcp` from a Docker container, you'll need to use the `mcp-proxy` package to bridge the stdio-based server to HTTP.
+
+This repository also includes a `Dockerfile` for catalog checks and container builds:
+
+```bash
+docker build -t mac-messages-mcp .
+```
+
+Messages.app automation is macOS-only and will not work inside a Linux container. Container use is primarily for MCP catalog compatibility and read-only database experiments with mounted data.
 
 #### Setup Instructions
 

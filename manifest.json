@@ -1,0 +1,80 @@
+{
+  "manifest_version": "0.3",
+  "name": "mac-messages-mcp",
+  "display_name": "Mac Messages MCP",
+  "version": "0.8.0",
+  "description": "Query, search, and send macOS Messages through a local MCP server.",
+  "long_description": "Mac Messages MCP runs locally on macOS and provides Claude Desktop with tools for reading recent Messages, fuzzy-searching conversations, resolving contacts, sending iMessage/SMS messages, listing chats, checking permissions, and finding or fetching message attachments. It requires Full Disk Access for Claude Desktop or the terminal used to run it.",
+  "author": {
+    "name": "Carter Lasalle",
+    "email": "carterlasalle@gmail.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/carterlasalle/mac_messages_mcp.git"
+  },
+  "homepage": "https://github.com/carterlasalle/mac_messages_mcp",
+  "support": "https://github.com/carterlasalle/mac_messages_mcp/issues",
+  "license": "MIT",
+  "keywords": ["macos", "messages", "imessage", "mcp", "claude-desktop"],
+  "server": {
+    "type": "python",
+    "entry_point": "mac_messages_mcp/server.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": ["--directory", "${__dirname}", "run", "mac-messages-mcp"]
+    }
+  },
+  "tools": [
+    {
+      "name": "tool_get_recent_messages",
+      "description": "Read recent macOS Messages, optionally filtered by contact."
+    },
+    {
+      "name": "tool_send_message",
+      "description": "Send an iMessage or SMS/RCS message through the Messages app."
+    },
+    {
+      "name": "tool_find_contact",
+      "description": "Find a contact by fuzzy name matching."
+    },
+    {
+      "name": "tool_check_db_access",
+      "description": "Diagnose access to the macOS Messages database."
+    },
+    {
+      "name": "tool_check_contacts",
+      "description": "List sample contacts available from AddressBook."
+    },
+    {
+      "name": "tool_check_addressbook",
+      "description": "Diagnose access to the macOS AddressBook database."
+    },
+    {
+      "name": "tool_get_chats",
+      "description": "List named group chats from Messages."
+    },
+    {
+      "name": "tool_check_imessage_availability",
+      "description": "Check whether a recipient appears to have iMessage available."
+    },
+    {
+      "name": "tool_fuzzy_search_messages",
+      "description": "Fuzzy-search message text across a configurable time window."
+    },
+    {
+      "name": "tool_search_attachments",
+      "description": "Search message attachments by date range, contact, and MIME type."
+    },
+    {
+      "name": "tool_get_attachment",
+      "description": "Fetch an attachment by database id, returning inline images when safe."
+    }
+  ],
+  "compatibility": {
+    "platforms": ["darwin"],
+    "runtimes": {
+      "python": ">=3.10"
+    }
+  }
+}

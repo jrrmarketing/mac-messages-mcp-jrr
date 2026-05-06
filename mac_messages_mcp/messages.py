@@ -202,6 +202,9 @@ _EMOJI_PATTERN = re.compile(
     "]+"
 )
 
+_CONTROL_CHARS_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_MAX_MESSAGE_BODY_CHARS = 4_000
+
 
 def _clean_text(text: str, strip_punctuation: bool = False) -> str:
     """Remove emoji and normalise whitespace.
@@ -217,6 +220,22 @@ def _clean_text(text: str, strip_punctuation: bool = False) -> str:
         text = re.sub(r"[^\w\s\'\-]", "", text, flags=re.UNICODE)
     text = re.sub(r'\s+', ' ', text).strip()
     return text
+
+
+def _sanitize_message_body(text: str, max_chars: int = _MAX_MESSAGE_BODY_CHARS) -> str:
+    """Prepare message text for single-line MCP output."""
+    if text is None:
+        return ""
+
+    cleaned = str(text).replace("\r\n", "\n").replace("\r", "\n")
+    cleaned = _CONTROL_CHARS_PATTERN.sub(" ", cleaned)
+    cleaned = cleaned.replace("\n", "\\n")
+
+    if max_chars > 0 and len(cleaned) > max_chars:
+        omitted = len(cleaned) - max_chars
+        return f"{cleaned[:max_chars].rstrip()}... [truncated {omitted} chars]"
+
+    return cleaned
 
 
 def clean_name(name: str) -> str:
@@ -988,6 +1007,7 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
         attachment_summary = _format_attachment_summary(
             attachments_by_msg.get(msg["ROWID"], [])
         )
+        body = _sanitize_message_body(body)
         formatted_messages.append(
             f"{message_prefix} {direction}: {body}{attachment_summary}"
         )
@@ -1169,6 +1189,7 @@ def fuzzy_search_messages(
         attachment_summary = _format_attachment_summary(
             attachments_by_msg.get(msg_dict.get("ROWID"), [])
         )
+        original_body = _sanitize_message_body(original_body)
         formatted_results.append(
             f"{message_prefix} {direction}: {original_body}{attachment_summary}"
         )
