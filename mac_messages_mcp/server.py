@@ -15,9 +15,11 @@ from mac_messages_mcp.messages import (
     check_messages_db_access,
     find_contact_by_name,
     fuzzy_search_messages,
+    get_attachment,
     get_cached_contacts,
     get_recent_messages,
     query_messages_db,
+    search_attachments,
     send_message,
 )
 
@@ -248,6 +250,76 @@ def tool_fuzzy_search_messages(
     except Exception as e:
         logger.error(f"Error in tool_fuzzy_search_messages: {e}", exc_info=True)
         return f"An unexpected error occurred during fuzzy message search: {str(e)}"
+
+
+@mcp.tool()
+def tool_search_attachments(
+    ctx: Context,
+    start_date: str = None,
+    end_date: str = None,
+    contact: str = None,
+    mime_type: str = None,
+    limit: int = 50,
+) -> str:
+    """
+    Search message attachments by date range, contact, and MIME type.
+
+    Returns metadata only — no file bytes. Then call tool_get_attachment to fetch
+    a specific file. This is the cheap progressive-disclosure entry point for
+    finding images/PDFs/etc. without going through message text.
+
+    Args:
+        start_date: Inclusive ISO date "YYYY-MM-DD" (UTC). Optional.
+        end_date: Inclusive ISO date "YYYY-MM-DD" (UTC). Optional.
+        contact: Phone number, email, or contact name. Optional.
+        mime_type: Prefix match e.g. "image/" or "application/pdf". Optional.
+        limit: Maximum results to return (default 50).
+    """
+    logger.info(
+        f"Searching attachments: start={start_date} end={end_date} "
+        f"contact={contact} mime={mime_type} limit={limit}"
+    )
+    try:
+        if contact is not None:
+            contact = str(contact)
+        return search_attachments(
+            start_date=start_date,
+            end_date=end_date,
+            contact=contact,
+            mime_type=mime_type,
+            limit=limit,
+        )
+    except Exception as e:
+        logger.error(f"Error in tool_search_attachments: {e}", exc_info=True)
+        return f"Error searching attachments: {str(e)}"
+
+
+@mcp.tool()
+def tool_get_attachment(
+    ctx: Context,
+    attachment_id: int,
+    max_bytes: int = 5_000_000,
+):
+    """
+    Fetch a specific attachment by its database ROWID.
+
+    For image MIME types under max_bytes, returns the image inline so you can
+    see it directly. For PDFs, video, audio, missing files, or oversize images,
+    returns a string with the resolved filesystem path so you can read the file
+    yourself.
+
+    Args:
+        attachment_id: The attachment's ROWID (from tool_search_attachments or
+            from the [attachments: ...] markers in message search results).
+        max_bytes: Cap on inline image bytes (default 5MB). Above this, returns
+            a path string instead of the inline image.
+    """
+    logger.info(f"Getting attachment id={attachment_id} max_bytes={max_bytes}")
+    try:
+        return get_attachment(attachment_id=int(attachment_id), max_bytes=max_bytes)
+    except Exception as e:
+        logger.error(f"Error in tool_get_attachment: {e}", exc_info=True)
+        return f"Error getting attachment: {str(e)}"
 
 
 @mcp.resource("messages://recent/{hours}")
