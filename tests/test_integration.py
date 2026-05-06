@@ -12,6 +12,7 @@ from mac_messages_mcp.messages import (
     _send_message_sms,
     check_addressbook_access,
     check_messages_db_access,
+    extract_body_from_attributed,
     find_contact_by_name,
     fuzzy_search_messages,
     get_recent_messages,
@@ -176,11 +177,69 @@ def test_sms_fallback_functionality():
     return True
 
 
+def test_applescript_escape_order():
+    """Test that AppleScript escaping uses correct order to prevent injection"""
+    print("Testing AppleScript escape order...")
+
+    from mac_messages_mcp.messages import escape_applescript
+
+    # Wrong order (quotes first, then backslashes) turns \" into \\"
+    # which leaves the quote unescaped. Correct order escapes the
+    # backslash first, then the quote, so both are safely neutralized.
+    malicious = 'test\\"break'
+    result = escape_applescript(malicious)
+    expected = 'test\\\\\\"break'
+    assert result == expected, f"Expected {expected!r}, got {result!r}"
+    print("AppleScript escape order is correct")
+
+    return True
+
+
+def test_attributed_body_extraction():
+    """Test attributedBody binary decoding handles edge cases"""
+    print("Testing attributedBody extraction...")
+
+    # None input
+    assert extract_body_from_attributed(None) is None
+    print("✅ None input returns None")
+
+    # Empty bytes
+    assert extract_body_from_attributed(b"") is None
+    print("✅ Empty bytes returns None")
+
+    # Garbage bytes
+    assert extract_body_from_attributed(b"\x00\x01\x02\x03") is None
+    print("✅ Garbage bytes returns None")
+
+    # Valid structure: NSString + 5-byte header + length byte + text
+    content = "Hello from iMessage"
+    encoded = content.encode("utf-8")
+    body = (
+        b"prefix"
+        + b"NSString"
+        + b"\x01\x00\x84\x01+"  # 5-byte header
+        + bytes([len(encoded)])  # length byte (< 0x80)
+        + encoded
+        + b"trailing"
+    )
+    result = extract_body_from_attributed(body)
+    assert result == content, f"Expected {content!r}, got {result!r}"
+    print("✅ Valid attributed body decoded")
+
+    # Random binary data should not crash
+    import os as _os
+    result = extract_body_from_attributed(_os.urandom(1024))
+    assert result is None or isinstance(result, str)
+    print("✅ Random binary data doesn't crash")
+
+    return True
+
+
 def run_all_tests():
     """Run all tests and report results"""
-    print("🚀 Running Mac Messages MCP Integration Tests")
+    print("Running Mac Messages MCP Integration Tests")
     print("=" * 50)
-    
+
     tests = [
         test_import_fixes,
         test_input_validation,
@@ -188,6 +247,8 @@ def run_all_tests():
         test_no_crashes,
         test_time_ranges,
         test_sms_fallback_functionality,
+        test_applescript_escape_order,
+        test_attributed_body_extraction,
     ]
     
     passed = 0
