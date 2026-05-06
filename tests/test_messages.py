@@ -4,7 +4,18 @@ Tests for the messages module
 import unittest
 from unittest.mock import patch, MagicMock
 
-from mac_messages_mcp.messages import run_applescript, get_messages_db_path, query_messages_db
+import os
+import sqlite3
+import tempfile
+
+from mac_messages_mcp.messages import (
+    escape_applescript,
+    extract_body_from_attributed,
+    get_chat_mapping,
+    get_messages_db_path,
+    query_messages_db,
+    run_applescript,
+)
 
 class TestMessages(unittest.TestCase):
     """Tests for the messages module"""
@@ -90,5 +101,256 @@ class TestSendMessageToRecipient(unittest.TestCase):
         self.assertIn('+1234\\"567', call_args)
         self.assertNotIn('"+1234"567"', call_args)
 
+
+class TestGetChatMapping(unittest.TestCase):
+    """Tests for get_chat_mapping error handling"""
+
+    @patch('mac_messages_mcp.messages.get_messages_db_path')
+    def test_returns_mapping(self, mock_path):
+        """Test happy path returns dict of room_name -> display_name"""
+        # Setup - create a temp DB with the expected schema
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            db_path = f.name
+        try:
+            mock_path.return_value = db_path
+            conn = sqlite3.connect(db_path)
+            conn.execute("CREATE TABLE chat (room_name TEXT, display_name TEXT)")
+            conn.execute("INSERT INTO chat VALUES ('room1', 'Alice')")
+            conn.execute("INSERT INTO chat VALUES ('room2', 'Bob')")
+            conn.commit()
+            conn.close()
+
+            # Run function
+            result = get_chat_mapping()
+
+            # Check results
+            self.assertEqual(result, {"room1": "Alice", "room2": "Bob"})
+        finally:
+            os.unlink(db_path)
+
+    @patch('mac_messages_mcp.messages.get_messages_db_path')
+    def test_inaccessible_db_returns_empty_dict(self, mock_path):
+        """Test that inaccessible database returns empty dict instead of crashing"""
+        # Setup
+        mock_path.return_value = "/nonexistent/path/chat.db"
+
+        # Run function
+        result = get_chat_mapping()
+
+        # Check results
+        self.assertEqual(result, {})
+
+    @patch('mac_messages_mcp.messages.get_messages_db_path')
+    def test_empty_table_returns_empty_dict(self, mock_path):
+        """Test that empty chat table returns empty dict"""
+        # Setup
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            db_path = f.name
+        try:
+            mock_path.return_value = db_path
+            conn = sqlite3.connect(db_path)
+            conn.execute("CREATE TABLE chat (room_name TEXT, display_name TEXT)")
+            conn.commit()
+            conn.close()
+
+            # Run function
+            result = get_chat_mapping()
+
+            # Check results
+            self.assertEqual(result, {})
+        finally:
+            os.unlink(db_path)
+
+
+class TestTimestampConversion(unittest.TestCase):
+    """Tests for Apple epoch timestamp conversion"""
+
+    def test_apple_epoch_constant(self):
+        """Test that 978307200 is the correct offset between Unix and Apple epochs"""
+        from datetime import datetime, timezone
+
+        # Setup
+        unix_epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        apple_epoch = datetime(2001, 1, 1, tzinfo=timezone.utc)
+
+        # Run
+        delta_seconds = int((apple_epoch - unix_epoch).total_seconds())
+
+        # Check results
+        self.assertEqual(delta_seconds, 978307200)
+
+    def test_nanosecond_timestamp_conversion(self):
+        """Test converting a nanosecond Apple timestamp to a datetime"""
+        from datetime import datetime, timezone
+
+        # Setup - a known Apple timestamp in nanoseconds
+        # 2025-01-01 00:00:00 UTC = 757382400 seconds after Apple epoch
+        apple_epoch_offset = 978307200
+        apple_seconds = 757382400
+        apple_nanos = apple_seconds * 1_000_000_000
+
+        # Run - convert like the fixed code does
+        msg_timestamp_s = apple_nanos / 1_000_000_000
+        date_val = datetime.fromtimestamp(msg_timestamp_s + apple_epoch_offset, tz=timezone.utc)
+
+        # Check results
+        expected = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        self.assertEqual(date_val, expected)
+
+    def test_second_format_timestamp(self):
+        """Test converting a second-format Apple timestamp"""
+        from datetime import datetime, timezone
+
+        # Setup - timestamp already in seconds (len <= 10)
+        apple_epoch_offset = 978307200
+        apple_seconds = 757382400  # 2025-01-01 00:00:00 UTC
+
+        # Run
+        msg_timestamp_s = apple_seconds  # already in seconds, no division needed
+        date_val = datetime.fromtimestamp(msg_timestamp_s + apple_epoch_offset, tz=timezone.utc)
+
+        # Check results
+        expected = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        self.assertEqual(date_val, expected)
+
+
+class TestExtractBodyFromAttributed(unittest.TestCase):
+    """Tests for extract_body_from_attributed"""
+
+    def _build_blob(self, text):
+        """Build a minimal typedstream blob with the given text content"""
+        encoded = text.encode("utf-8")
+        length = len(encoded)
+        # NSString marker + 5-byte header (\x01\x00\x84\x01+) + length byte + text
+        if length < 0x80:
+            length_bytes = bytes([length])
+        else:
+            # 0x81 prefix for 2-byte LE length
+            length_bytes = b"\x81" + length.to_bytes(2, "little")
+        return b"prefix" + b"NSString" + b"\x01\x00\x84\x01+" + length_bytes + encoded + b"trailing"
+
+    def test_none_returns_none(self):
+        """Test that None input returns None"""
+        # Run function
+        result = extract_body_from_attributed(None)
+
+        # Check results
+        self.assertIsNone(result)
+
+    def test_empty_bytes_returns_none(self):
+        """Test that empty bytes returns None"""
+        # Run function
+        result = extract_body_from_attributed(b"")
+
+        # Check results
+        self.assertIsNone(result)
+
+    def test_garbage_bytes_returns_none(self):
+        """Test that random bytes return None without crashing"""
+        # Run function
+        result = extract_body_from_attributed(b"\x00\x01\x02\x03")
+
+        # Check results
+        self.assertIsNone(result)
+
+    def test_valid_short_message(self):
+        """Test extracting a short message (length < 0x80)"""
+        # Setup
+        blob = self._build_blob("Hello")
+
+        # Run function
+        result = extract_body_from_attributed(blob)
+
+        # Check results
+        self.assertEqual(result, "Hello")
+
+    def test_valid_longer_message(self):
+        """Test extracting a message with 2-byte length encoding"""
+        # Setup
+        content = "A" * 200  # > 0x7F, triggers 0x81 length prefix
+        blob = self._build_blob(content)
+
+        # Run function
+        result = extract_body_from_attributed(blob)
+
+        # Check results
+        self.assertEqual(result, content)
+
+    def test_no_nsstring_marker(self):
+        """Test that missing NSString marker returns None"""
+        # Setup
+        body = b"prefix data with no marker trailing"
+
+        # Run function
+        result = extract_body_from_attributed(body)
+
+        # Check results
+        self.assertIsNone(result)
+
+    def test_truncated_after_nsstring(self):
+        """Test that truncated data after NSString returns None"""
+        # Setup - NSString marker but not enough bytes for header
+        body = b"NSString\x01\x00"
+
+        # Run function
+        result = extract_body_from_attributed(body)
+
+        # Check results
+        self.assertIsNone(result)
+
+    def test_random_binary_does_not_crash(self):
+        """Test that random binary data doesn't raise exceptions"""
+        import os
+
+        # Setup
+        random_data = os.urandom(1024)
+
+        # Run function - should not raise
+        result = extract_body_from_attributed(random_data)
+
+        # Check results
+        self.assertIn(type(result), (str, type(None)))
+
+
+class TestEscapeAppleScript(unittest.TestCase):
+    """Tests for the escape_applescript helper."""
+
+    def test_none_returns_empty(self):
+        self.assertEqual(escape_applescript(None), "")
+
+    def test_plain_string_unchanged(self):
+        self.assertEqual(escape_applescript("hello world"), "hello world")
+
+    def test_double_quote_escaped(self):
+        self.assertEqual(escape_applescript('say "hi"'), 'say \\"hi\\"')
+
+    def test_backslash_escaped_first(self):
+        # Backslashes must be escaped before quotes; otherwise the backslash
+        # injected by quote-escaping would itself get doubled.
+        self.assertEqual(escape_applescript('a\\b"c'), 'a\\\\b\\"c')
+
+    def test_newline_escaped(self):
+        self.assertEqual(escape_applescript("a\nb"), "a\\nb")
+
+    def test_carriage_return_escaped(self):
+        self.assertEqual(escape_applescript("a\rb"), "a\\nb")
+
+    def test_crlf_escaped(self):
+        self.assertEqual(escape_applescript("a\r\nb"), "a\\nb")
+
+    def test_tab_escaped(self):
+        self.assertEqual(escape_applescript("a\tb"), "a\\tb")
+
+    def test_unicode_line_separator_escaped(self):
+        # U+2028 / U+2029 terminate AppleScript string literals.
+        self.assertEqual(escape_applescript("a\u2028b"), "a\\nb")
+        self.assertEqual(escape_applescript("a\u2029b"), "a\\nb")
+
+    def test_combined(self):
+        self.assertEqual(
+            escape_applescript('line1\nline2"end\\'),
+            'line1\\nline2\\"end\\\\',
+        )
+
 if __name__ == '__main__':
-    unittest.main() 
+    unittest.main()

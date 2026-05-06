@@ -34,8 +34,19 @@ See the [Integration section](#integration) below for setup instructions.
 - **Message Reading**: Read recent messages from the macOS Messages app
 - **Contact Filtering**: Filter messages by specific contacts or phone numbers
 - **Fuzzy Search**: Search through message content with intelligent matching
+- **Attachments**: Find and view photos, PDFs, and other attachments shared in conversations
 - **iMessage Detection**: Check if recipients have iMessage before sending
 - **Cross-Platform**: Works with both iPhone/Mac users (iMessage) and Android users (SMS/RCS)
+
+### Working with attachments
+
+Attachment access uses **progressive disclosure** — discovery is cheap, fetching is deliberate:
+
+1. **Tier 1 — discovery in message search.** `tool_get_recent_messages` and `tool_fuzzy_search_messages` annotate messages that have attachments with a compact summary like `[attachments: #42 image/jpeg (invitation.jpg)]`. The id lets you fetch the file later.
+2. **Tier 2 — attachment-first search.** `tool_search_attachments(start_date, end_date, contact, mime_type, limit)` returns metadata only (id, MIME type, filename, size, sender) — useful for "find all images Elizabeth sent in April 2026" without scanning message text.
+3. **Tier 3 — fetch.** `tool_get_attachment(attachment_id)` returns the file. Image MIME types come back inline (HEIC is converted to PNG so it can be viewed directly). PDFs, video, and audio come back as a filesystem path the agent can read with its own tools. Inline image bytes are capped at 5MB by default to avoid context blowup; oversized images fall back to path return.
+
+Stickers, link-preview "balloon" payloads, and `.pluginPayloadAttachment` containers are filtered out by default.
 
 ## Prerequisites
 
