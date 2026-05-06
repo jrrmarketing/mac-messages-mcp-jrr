@@ -5,6 +5,7 @@ A Python bridge for interacting with the macOS Messages app using MCP (Multiple 
 [![PyPI Downloads](https://static.pepy.tech/badge/mac-messages-mcp)](https://pepy.tech/projects/mac-messages-mcp)
 
 [![Trust Score](https://archestra.ai/mcp-catalog/api/badge/quality/carterlasalle/mac_messages_mcp)](https://archestra.ai/mcp-catalog/carterlasalle__mac_messages_mcp)
+[![mac_messages_mcp MCP score](https://glama.ai/mcp/servers/carterlasalle/mac_messages_mcp/badges/score.svg)](https://glama.ai/mcp/servers/carterlasalle/mac_messages_mcp)
 
 ![a-diagram-of-a-mac-computer-with-the-tex_FvvnmbaBTFeKy6F2GMlLqA_IfCBMgJARcia1WTH7FaqwA](https://github.com/user-attachments/assets/dbbdaa14-fadd-434d-a265-9e0c0071c11d)
 

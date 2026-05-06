@@ -29,8 +29,9 @@ python scripts/bump_version.py major
 The script will:
 1. Update the version in `pyproject.toml`
 2. Update the version in `mac_messages_mcp/__init__.py`
-3. Optionally commit the changes
-4. Optionally create a Git tag
+3. Update the version in `manifest.json` when the Claude Desktop extension manifest is present
+4. Optionally commit the changes
+5. Optionally create a Git tag
 
 ### Publishing a New Version
 
@@ -53,6 +54,7 @@ Versions are stored in the following files:
 
 - `pyproject.toml`: The primary source of version information for the package
 - `mac_messages_mcp/__init__.py`: Contains the `__version__` variable used by the package
+- `manifest.json`: Contains the Claude Desktop extension package version
 - Git tags: Used to trigger releases and provide version history
 
 ## Versioning Guidelines
@@ -63,4 +65,4 @@ Follow these guidelines when deciding which version to bump:
 - **MINOR** (0.X.0): New features or improvements that don't break existing functionality
 - **MAJOR** (X.0.0): Changes that break backward compatibility
 
-Always test the package before releasing a new version, especially for MAJOR and MINOR releases. 
+Always test the package before releasing a new version, especially for MAJOR and MINOR releases.

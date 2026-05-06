@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "mac-messages-mcp",
   "display_name": "Mac Messages MCP",
-  "version": "0.8.0",
+  "version": "0.9.1",
   "description": "Query, search, and send macOS Messages through a local MCP server.",
   "long_description": "Mac Messages MCP runs locally on macOS and provides Claude Desktop with tools for reading recent Messages, fuzzy-searching conversations, resolving contacts, sending iMessage/SMS messages, listing chats, checking permissions, and finding or fetching message attachments. It requires Full Disk Access for Claude Desktop or the terminal used to run it.",
   "author": {
@@ -28,47 +28,47 @@
   "tools": [
     {
       "name": "tool_get_recent_messages",
-      "description": "Read recent macOS Messages, optionally filtered by contact."
+      "description": "Read-only recent Messages lookup with optional contact filtering. Requires Full Disk Access and returns a plain-text message summary."
     },
     {
       "name": "tool_send_message",
-      "description": "Send an iMessage or SMS/RCS message through the Messages app."
+      "description": "Sends one outgoing iMessage or SMS/RCS through Messages. Requires Messages automation permission and returns a plain-text success or error."
     },
     {
       "name": "tool_find_contact",
-      "description": "Find a contact by fuzzy name matching."
+      "description": "Read-only AddressBook contact lookup by fuzzy name match. Requires Contacts permission and returns numbered matches for contact:N selection."
     },
     {
       "name": "tool_check_db_access",
-      "description": "Diagnose access to the macOS Messages database."
+      "description": "Read-only diagnostic for Messages database access and Full Disk Access permission errors."
     },
     {
       "name": "tool_check_contacts",
-      "description": "List sample contacts available from AddressBook."
+      "description": "Read-only contact availability check returning a count and sample AddressBook entries."
     },
     {
       "name": "tool_check_addressbook",
-      "description": "Diagnose access to the macOS AddressBook database."
+      "description": "Read-only diagnostic for AddressBook database access and Contacts permission errors."
     },
     {
       "name": "tool_get_chats",
-      "description": "List named group chats from Messages."
+      "description": "Read-only group chat listing that returns chat names and IDs for group message sends."
     },
     {
       "name": "tool_check_imessage_availability",
-      "description": "Check whether a recipient appears to have iMessage available."
+      "description": "Read-only iMessage capability check for a phone number or email; does not send a message."
     },
     {
       "name": "tool_fuzzy_search_messages",
-      "description": "Fuzzy-search message text across a configurable time window."
+      "description": "Read-only fuzzy message search with similarity scores across a configurable time window."
     },
     {
       "name": "tool_search_attachments",
-      "description": "Search message attachments by date range, contact, and MIME type."
+      "description": "Read-only attachment metadata search by date range, contact, and MIME type; returns IDs for later fetch."
     },
     {
       "name": "tool_get_attachment",
-      "description": "Fetch an attachment by database id, returning inline images when safe."
+      "description": "Read-only attachment fetch by database ID, returning inline images when small enough or a local path otherwise."
     }
   ],
   "compatibility": {

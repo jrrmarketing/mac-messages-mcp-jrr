@@ -1,12 +1,13 @@
 [build-system]
-requires = ["setuptools>=64", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "mac-messages-mcp"
-version = "0.9.0"
+version = "0.9.1"
 description = "A bridge for interacting with macOS Messages app through MCP"
 readme = {file = "README.md", content-type = "text/markdown"}
+license = "MIT"
 requires-python = ">=3.10"
 authors = [
     {name = "Carter Lasalle", email = "carterlasalle@gmail.com"}
@@ -15,7 +16,6 @@ keywords = ["macos", "messages", "imessage", "mcp"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -50,7 +50,6 @@ mac_messages_mcp = "mac_messages_mcp.server:run_server"
 
 [tool.setuptools]
 packages = ["mac_messages_mcp"]
-license-files = []
 
 [tool.black]
 line-length = 88

@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-05-06
+
+### Added
+- Added `glama.json` metadata for Glama server ownership and profile completion.
+
+### Changed
+- Expanded MCP tool descriptions and parameter schemas with permissions, side-effect, return-shape, and tool-selection guidance.
+- Updated Claude Desktop extension metadata to match the current package version.
+- Modernized package license metadata to avoid setuptools deprecation warnings.
+
+## [0.9.0] - 2026-05-06
+
+### Added
+- Added message attachment discovery, metadata search, and attachment fetching.
+- Added Claude Desktop Extension packaging metadata.
+- Added Dockerfile and packaging documentation for catalog and local inspection workflows.
+
+### Fixed
+- Hardened message output rendering for control characters, embedded newlines, and oversized message bodies.
+- Resolved outstanding pull requests and issue-reported test coverage gaps.
+
 ## [0.7.0] - 2024-12-28
 
 ### 🚀 MAJOR FEATURE: SMS/RCS Fallback Support
@@ -109,4 +130,4 @@ None - all changes are backward compatible while fixing broken functionality.
 - Inconsistent error handling and misleading error messages
 
 ## Previous Versions
-[Previous changelog entries would go here] 
+[Previous changelog entries would go here]
