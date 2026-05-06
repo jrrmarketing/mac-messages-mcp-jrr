@@ -68,6 +68,67 @@ class TestMessages(unittest.TestCase):
         self.assertEqual(result, '/Users/testuser/Library/Messages/chat.db')
         mock_expanduser.assert_called_with('~')
 
+class TestEscapeAppleScriptInjection(unittest.TestCase):
+    """Tests for AppleScript escaping injection edge cases."""
+
+    def test_plain_text_unchanged(self):
+        """Test that plain text passes through unchanged"""
+        # Run function
+        result = escape_applescript('hello world')
+
+        # Check results
+        self.assertEqual(result, 'hello world')
+
+    def test_quotes_escaped(self):
+        """Test that double quotes are escaped"""
+        # Run function
+        result = escape_applescript('say "hello"')
+
+        # Check results
+        self.assertEqual(result, 'say \\"hello\\"')
+
+    def test_backslashes_escaped(self):
+        """Test that backslashes are escaped"""
+        # Run function
+        result = escape_applescript('path\\to\\file')
+
+        # Check results
+        self.assertEqual(result, 'path\\\\to\\\\file')
+
+    def test_escape_order_prevents_injection(self):
+        """Test that backslashes are escaped before quotes to prevent injection"""
+        # Setup - a string with backslash-quote that could break AppleScript if
+        # quotes are escaped first (producing \\" which unescapes the quote)
+        malicious = 'test\\"injection'
+
+        # Run function
+        result = escape_applescript(malicious)
+
+        # Check results - backslash escaped first, then quote
+        # Input:  test\"injection
+        # Step 1: test\\"injection  (backslash escaped)
+        # Step 2: test\\\\"injection  (quote escaped)
+        self.assertEqual(result, 'test\\\\\\"injection')
+        # The result should NOT contain an unescaped quote
+        self.assertNotIn('\\"', result.replace('\\\\"', ''))
+
+    def test_empty_string(self):
+        """Test that empty string returns empty string"""
+        # Run function
+        result = escape_applescript('')
+
+        # Check results
+        self.assertEqual(result, '')
+
+    def test_unicode_unchanged(self):
+        """Test that unicode characters pass through unchanged"""
+        # Run function
+        result = escape_applescript('Hello 世界')
+
+        # Check results
+        self.assertEqual(result, 'Hello 世界')
+
+
 class TestSendMessageToRecipient(unittest.TestCase):
     """Tests for _send_message_to_recipient escaping"""
 

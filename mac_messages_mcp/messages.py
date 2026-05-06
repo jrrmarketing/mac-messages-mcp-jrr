@@ -685,26 +685,17 @@ def _send_message_to_recipient(recipient: str, message: str, contact_name: str =
     Returns:
         Success or error message
     """
-    # Escape inputs for safe AppleScript interpolation (backslashes first, then quotes)
-    safe_recipient = recipient.replace('\\', '\\\\').replace('"', '\\"')
+    safe_recipient = escape_applescript(recipient)
     file_path = None
     try:
         # Create a unique temporary file with the message content
         tmp = tempfile.NamedTemporaryFile(suffix='.txt', delete=False)
         file_path = tmp.name
-        safe_file_path = file_path.replace('\\', '\\\\').replace('"', '\\"')
+        safe_file_path = escape_applescript(file_path)
         try:
             tmp.write(message.encode('utf-8'))
         finally:
             tmp.close()
-
-        # Sanitize the recipient before embedding it in AppleScript.
-        # Without this, `safe_recipient` is undefined inside this function and
-        # both branches below raise NameError on every call. The exception is
-        # swallowed by the outer `except Exception`, which silently routes
-        # every send through `_send_message_direct`, making this entire
-        # file-based code path effectively dead.
-        safe_recipient = recipient.replace('\\', '\\\\').replace('"', '\\"')
 
         # Adjust the AppleScript command based on whether this is a group chat
         if not group_chat:
