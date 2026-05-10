@@ -1,74 +1,81 @@
 """
 Tests for the messages module
 """
-import unittest
-from unittest.mock import patch, MagicMock
 
 import os
 import sqlite3
 import tempfile
+import unittest
+from unittest.mock import MagicMock, patch
 
 from mac_messages_mcp.messages import (
+    _find_chat_by_identifier,
+    _format_phone_for_messages,
     _sanitize_message_body,
     _send_message_to_recipient,
     escape_applescript,
     extract_body_from_attributed,
+    find_contact_by_name,
     get_chat_mapping,
     get_messages_db_path,
+    get_recent_messages,
     query_messages_db,
     run_applescript,
+    send_message,
 )
+
 
 class TestMessages(unittest.TestCase):
     """Tests for the messages module"""
 
-    @patch('subprocess.Popen')
+    @patch("subprocess.Popen")
     def test_run_applescript_success(self, mock_popen):
         """Test running AppleScript successfully"""
         # Setup mock
         process_mock = MagicMock()
         process_mock.returncode = 0
-        process_mock.communicate.return_value = (b'Success', b'')
+        process_mock.communicate.return_value = (b"Success", b"")
         mock_popen.return_value = process_mock
 
         # Run function
         result = run_applescript('tell application "Messages" to get name')
 
         # Check results
-        self.assertEqual(result, 'Success')
+        self.assertEqual(result, "Success")
         mock_popen.assert_called_with(
-            ['osascript', '-e', 'tell application "Messages" to get name'],
+            ["osascript", "-e", 'tell application "Messages" to get name'],
             stdout=-1,
-            stderr=-1
+            stderr=-1,
         )
 
-    @patch('subprocess.Popen')
+    @patch("subprocess.Popen")
     def test_run_applescript_error(self, mock_popen):
         """Test running AppleScript with error"""
         # Setup mock
         process_mock = MagicMock()
         process_mock.returncode = 1
-        process_mock.communicate.return_value = (b'', b'Error message')
+        process_mock.communicate.return_value = (b"", b"Error message")
         mock_popen.return_value = process_mock
 
         # Run function
-        result = run_applescript('invalid script')
+        result = run_applescript("invalid script")
 
         # Check results
-        self.assertEqual(result, 'Error: Error message')
+        self.assertEqual(result, "Error: Error message")
 
-    @patch('os.path.expanduser')
+    @patch("os.path.expanduser")
     def test_get_messages_db_path(self, mock_expanduser):
         """Test getting the Messages database path"""
         # Setup mock
-        mock_expanduser.return_value = '/Users/testuser'
+        mock_expanduser.return_value = "/Users/testuser"
 
         # Run function
         result = get_messages_db_path()
 
         # Check results
-        self.assertEqual(result, '/Users/testuser/Library/Messages/chat.db')
-        mock_expanduser.assert_called_with('~')
+        self.assertEqual(result, "/Users/testuser/Library/Messages/chat.db")
+        mock_expanduser.assert_called_with("~")
+
 
 class TestEscapeAppleScriptInjection(unittest.TestCase):
     """Tests for AppleScript escaping injection edge cases."""
@@ -76,10 +83,10 @@ class TestEscapeAppleScriptInjection(unittest.TestCase):
     def test_plain_text_unchanged(self):
         """Test that plain text passes through unchanged"""
         # Run function
-        result = escape_applescript('hello world')
+        result = escape_applescript("hello world")
 
         # Check results
-        self.assertEqual(result, 'hello world')
+        self.assertEqual(result, "hello world")
 
     def test_quotes_escaped(self):
         """Test that double quotes are escaped"""
@@ -92,10 +99,10 @@ class TestEscapeAppleScriptInjection(unittest.TestCase):
     def test_backslashes_escaped(self):
         """Test that backslashes are escaped"""
         # Run function
-        result = escape_applescript('path\\to\\file')
+        result = escape_applescript("path\\to\\file")
 
         # Check results
-        self.assertEqual(result, 'path\\\\to\\\\file')
+        self.assertEqual(result, "path\\\\to\\\\file")
 
     def test_escape_order_prevents_injection(self):
         """Test that backslashes are escaped before quotes to prevent injection"""
@@ -112,23 +119,23 @@ class TestEscapeAppleScriptInjection(unittest.TestCase):
         # Step 2: test\\\\"injection  (quote escaped)
         self.assertEqual(result, 'test\\\\\\"injection')
         # The result should NOT contain an unescaped quote
-        self.assertNotIn('\\"', result.replace('\\\\"', ''))
+        self.assertNotIn('\\"', result.replace('\\\\"', ""))
 
     def test_empty_string(self):
         """Test that empty string returns empty string"""
         # Run function
-        result = escape_applescript('')
+        result = escape_applescript("")
 
         # Check results
-        self.assertEqual(result, '')
+        self.assertEqual(result, "")
 
     def test_unicode_unchanged(self):
         """Test that unicode characters pass through unchanged"""
         # Run function
-        result = escape_applescript('Hello 世界')
+        result = escape_applescript("Hello 世界")
 
         # Check results
-        self.assertEqual(result, 'Hello 世界')
+        self.assertEqual(result, "Hello 世界")
 
 
 class TestSanitizeMessageBody(unittest.TestCase):
@@ -148,43 +155,93 @@ class TestSanitizeMessageBody(unittest.TestCase):
 class TestSendMessageToRecipient(unittest.TestCase):
     """Tests for _send_message_to_recipient escaping"""
 
-    @patch('mac_messages_mcp.messages.run_applescript')
+    @patch("mac_messages_mcp.messages.run_applescript")
     def test_does_not_raise_name_error(self, mock_applescript):
         """Test that safe_recipient is defined (was NameError after merge)"""
         from mac_messages_mcp.messages import _send_message_to_recipient
 
         # Setup mock
-        mock_applescript.return_value = 'Success'
+        mock_applescript.return_value = "Success"
 
         # Run function — this raised NameError before the fix
-        result = _send_message_to_recipient('+15551234567', 'hello')
+        result = _send_message_to_recipient("+15551234567", "hello")
 
         # Check results
-        self.assertIn('sent successfully', result)
+        self.assertIn("sent successfully", result)
 
-    @patch('mac_messages_mcp.messages.run_applescript')
+    @patch("mac_messages_mcp.messages.run_applescript")
     def test_recipient_with_quotes_is_escaped(self, mock_applescript):
         """Test that quotes in recipient don't break the AppleScript command"""
         from mac_messages_mcp.messages import _send_message_to_recipient
 
         # Setup mock
-        mock_applescript.return_value = 'Success'
+        mock_applescript.return_value = "Success"
 
         # Run function with a recipient containing quotes
-        _send_message_to_recipient('+1234"567', 'hello')
+        _send_message_to_recipient('+1234"567', "hello")
 
         # Check results — the AppleScript command should have escaped quotes
         call_args = mock_applescript.call_args[0][0]
         self.assertIn('+1234\\"567', call_args)
         self.assertNotIn('"+1234"567"', call_args)
 
+
+class TestRecipientNormalization(unittest.TestCase):
+    """Tests for recipient formats handed to Messages.app."""
+
+    def test_phone_formatter_preserves_e164_plus(self):
+        self.assertEqual(_format_phone_for_messages("+19565179045"), "+19565179045")
+
+    def test_phone_formatter_adds_plus_to_country_code_digits(self):
+        self.assertEqual(_format_phone_for_messages("19565179045"), "+19565179045")
+
+    def test_phone_formatter_assumes_us_country_code_for_ten_digits(self):
+        self.assertEqual(_format_phone_for_messages("(956) 517-9045"), "+19565179045")
+
+    @patch("mac_messages_mcp.messages._send_message_to_recipient")
+    def test_send_message_normalizes_bare_digits_before_dispatch(self, mock_send):
+        mock_send.return_value = "sent"
+
+        result = send_message("19565179045", "hello")
+
+        self.assertEqual(result, "sent")
+        mock_send.assert_called_once_with("+19565179045", "hello", group_chat=False)
+
+    @patch("mac_messages_mcp.messages._send_message_to_recipient")
+    def test_send_message_rejects_short_phone_numbers(self, mock_send):
+        result = send_message("12345", "hello")
+
+        self.assertIn("Phone recipients must be E.164-style", result)
+        mock_send.assert_not_called()
+
+    @patch("mac_messages_mcp.messages.get_cached_contacts")
+    def test_find_contact_returns_messages_ready_phone_number(self, mock_contacts):
+        mock_contacts.return_value = {"19565179045": "Hugo Example"}
+        with patch.dict(
+            "mac_messages_mcp.messages._PHONE_TO_DETAILS_MAP",
+            {
+                "19565179045": {
+                    "first_name": "Hugo",
+                    "last_name": "Example",
+                    "nickname": "",
+                    "full_name": "Hugo Example",
+                }
+            },
+            clear=True,
+        ):
+            matches = find_contact_by_name("Hugo")
+
+        self.assertEqual(matches[0]["phone"], "+19565179045")
+
+
 class TestTempFileRace(unittest.TestCase):
     """Tests for temp file race condition fix in _send_message_to_recipient"""
 
-    @patch('mac_messages_mcp.messages.run_applescript')
+    @patch("mac_messages_mcp.messages.run_applescript")
     def test_temp_file_uses_unique_name(self, mock_applescript):
         """Test that temp file gets a unique name (not hardcoded imessage_tmp.txt)"""
         import os
+
         mock_applescript.return_value = ""
 
         # Run function
@@ -197,14 +254,15 @@ class TestTempFileRace(unittest.TestCase):
         # Should reference a temp directory path
         self.assertTrue(
             "/tmp/" in script or "/var/folders/" in script,
-            f"Expected temp directory path in script, got: {script[:200]}"
+            f"Expected temp directory path in script, got: {script[:200]}",
         )
 
-    @patch('mac_messages_mcp.messages.run_applescript')
+    @patch("mac_messages_mcp.messages.run_applescript")
     def test_temp_file_cleaned_up_on_success(self, mock_applescript):
         """Test that temp file is removed after successful send"""
-        import os
         import glob
+        import os
+
         mock_applescript.return_value = ""
 
         # Count temp files before
@@ -218,11 +276,12 @@ class TestTempFileRace(unittest.TestCase):
         leaked = after - before
         self.assertEqual(len(leaked), 0, f"Temp files leaked: {leaked}")
 
-    @patch('mac_messages_mcp.messages.run_applescript')
+    @patch("mac_messages_mcp.messages.run_applescript")
     def test_temp_file_cleaned_up_on_error(self, mock_applescript):
         """Test that temp file is removed even when AppleScript fails"""
-        import os
         import glob
+        import os
+
         mock_applescript.return_value = "Error: some failure"
 
         # Count temp files before
@@ -240,7 +299,7 @@ class TestTempFileRace(unittest.TestCase):
 class TestGetChatMapping(unittest.TestCase):
     """Tests for get_chat_mapping error handling"""
 
-    @patch('mac_messages_mcp.messages.get_messages_db_path')
+    @patch("mac_messages_mcp.messages.get_messages_db_path")
     def test_returns_mapping(self, mock_path):
         """Test happy path returns dict of room_name -> display_name"""
         # Setup - create a temp DB with the expected schema
@@ -263,7 +322,7 @@ class TestGetChatMapping(unittest.TestCase):
         finally:
             os.unlink(db_path)
 
-    @patch('mac_messages_mcp.messages.get_messages_db_path')
+    @patch("mac_messages_mcp.messages.get_messages_db_path")
     def test_inaccessible_db_returns_empty_dict(self, mock_path):
         """Test that inaccessible database returns empty dict instead of crashing"""
         # Setup
@@ -275,7 +334,7 @@ class TestGetChatMapping(unittest.TestCase):
         # Check results
         self.assertEqual(result, {})
 
-    @patch('mac_messages_mcp.messages.get_messages_db_path')
+    @patch("mac_messages_mcp.messages.get_messages_db_path")
     def test_empty_table_returns_empty_dict(self, mock_path):
         """Test that empty chat table returns empty dict"""
         # Setup
@@ -295,6 +354,64 @@ class TestGetChatMapping(unittest.TestCase):
             self.assertEqual(result, {})
         finally:
             os.unlink(db_path)
+
+
+class TestGetRecentMessagesChatFilter(unittest.TestCase):
+    """Tests for group chat filtering in get_recent_messages."""
+
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_find_chat_by_identifier_accepts_short_chat_id(self, mock_query):
+        mock_query.return_value = [
+            {
+                "ROWID": 7,
+                "display_name": "Family",
+                "chat_identifier": "iMessage;-;chat123",
+                "room_name": "chat123",
+            }
+        ]
+
+        result = _find_chat_by_identifier("chat123")
+
+        self.assertEqual(result["ROWID"], 7)
+        params = mock_query.call_args[0][1]
+        self.assertIn("chat123", params)
+        self.assertIn("iMessage;-;chat123", params)
+
+    @patch("mac_messages_mcp.messages._attachments_for_message_ids", return_value={})
+    @patch("mac_messages_mcp.messages.get_chat_mapping", return_value={})
+    @patch("mac_messages_mcp.messages.get_contact_name", return_value="Alice")
+    @patch(
+        "mac_messages_mcp.messages._find_chat_by_identifier",
+        return_value={"ROWID": 7, "display_name": "Family"},
+    )
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_get_recent_messages_filters_by_chat_id(
+        self, mock_query, _chat, _name, _mapping, _atts
+    ):
+        mock_query.return_value = [
+            {
+                "ROWID": 100,
+                "date": 700_000_000_000_000_000,
+                "text": "group hello",
+                "attributedBody": None,
+                "is_from_me": 0,
+                "handle_id": 99,
+                "cache_roomnames": None,
+            }
+        ]
+
+        result = get_recent_messages(hours=24, chat_id="chat123")
+
+        sql, params = mock_query.call_args[0]
+        self.assertIn("chat_message_join", sql)
+        self.assertEqual(params[-1], 7)
+        self.assertIn("[Family]", result)
+        self.assertIn("group hello", result)
+
+    def test_get_recent_messages_rejects_contact_and_chat_id(self):
+        result = get_recent_messages(hours=24, contact="Alice", chat_id="chat123")
+
+        self.assertIn("either contact or chat_id", result)
 
 
 class TestTimestampConversion(unittest.TestCase):
@@ -326,7 +443,9 @@ class TestTimestampConversion(unittest.TestCase):
 
         # Run - convert like the fixed code does
         msg_timestamp_s = apple_nanos / 1_000_000_000
-        date_val = datetime.fromtimestamp(msg_timestamp_s + apple_epoch_offset, tz=timezone.utc)
+        date_val = datetime.fromtimestamp(
+            msg_timestamp_s + apple_epoch_offset, tz=timezone.utc
+        )
 
         # Check results
         expected = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
@@ -342,7 +461,9 @@ class TestTimestampConversion(unittest.TestCase):
 
         # Run
         msg_timestamp_s = apple_seconds  # already in seconds, no division needed
-        date_val = datetime.fromtimestamp(msg_timestamp_s + apple_epoch_offset, tz=timezone.utc)
+        date_val = datetime.fromtimestamp(
+            msg_timestamp_s + apple_epoch_offset, tz=timezone.utc
+        )
 
         # Check results
         expected = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
@@ -362,7 +483,14 @@ class TestExtractBodyFromAttributed(unittest.TestCase):
         else:
             # 0x81 prefix for 2-byte LE length
             length_bytes = b"\x81" + length.to_bytes(2, "little")
-        return b"prefix" + b"NSString" + b"\x01\x00\x84\x01+" + length_bytes + encoded + b"trailing"
+        return (
+            b"prefix"
+            + b"NSString"
+            + b"\x01\x00\x84\x01+"
+            + length_bytes
+            + encoded
+            + b"trailing"
+        )
 
     def test_none_returns_none(self):
         """Test that None input returns None"""
@@ -487,5 +615,6 @@ class TestEscapeAppleScript(unittest.TestCase):
             'line1\\nline2\\"end\\\\',
         )
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()

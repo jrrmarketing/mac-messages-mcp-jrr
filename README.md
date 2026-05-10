@@ -34,6 +34,7 @@ See the [Integration section](#integration) below for setup instructions.
 - **Smart Fallback**: Seamless fallback to SMS when iMessage is unavailable (perfect for Android users)
 - **Message Reading**: Read recent messages from the macOS Messages app
 - **Contact Filtering**: Filter messages by specific contacts or phone numbers
+- **Group Chat Filtering**: Use chat IDs from `tool_get_chats` to read one group conversation chronologically
 - **Fuzzy Search**: Search through message content with intelligent matching
 - **Attachments**: Find and view photos, PDFs, and other attachments shared in conversations
 - **iMessage Detection**: Check if recipients have iMessage before sending
@@ -48,6 +49,10 @@ Attachment access uses **progressive disclosure** — discovery is cheap, fetchi
 3. **Tier 3 — fetch.** `tool_get_attachment(attachment_id)` returns the file. Image MIME types come back inline (HEIC is converted to PNG so it can be viewed directly). PDFs, video, and audio come back as a filesystem path the agent can read with its own tools. Inline image bytes are capped at 5MB by default to avoid context blowup; oversized images fall back to path return.
 
 Stickers, link-preview "balloon" payloads, and `.pluginPayloadAttachment` containers are filtered out by default.
+
+### Recipient formats
+
+For direct sends, E.164 phone numbers with a leading `+` are the most reliable format, such as `+14155551234`. Bare digit phone numbers with a country code are normalized before sending, and 10-digit US numbers are sent as `+1...`. `tool_find_contact` returns phone matches in the same send-ready format.
 
 ## Prerequisites
 

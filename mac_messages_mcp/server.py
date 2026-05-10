@@ -13,6 +13,7 @@ from pydantic import Field
 
 from mac_messages_mcp.messages import (
     _check_imessage_availability,
+    _format_phone_for_messages,
     check_addressbook_access,
     check_messages_db_access,
     find_contact_by_name,
@@ -56,6 +57,15 @@ def tool_get_recent_messages(
             )
         ),
     ] = None,
+    chat_id: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Optional group chat identifier from tool_get_chats, such as "
+                '"chat721054478304420871" or "iMessage;-;chat721054478304420871".'
+            )
+        ),
+    ] = None,
 ) -> str:
     """
     Read recent macOS Messages as a plain-text summary.
@@ -63,16 +73,22 @@ def tool_get_recent_messages(
     This is read-only: it queries the local Messages database and does not send,
     edit, or delete messages. Requires macOS Full Disk Access for the host app or
     terminal. Returns sanitized message text, timestamps, participants, and compact
-    attachment markers when files are present. Use this when you need chronological
-    recent context; use tool_fuzzy_search_messages when searching for specific text,
-    and tool_get_chats when you only need group chat IDs.
+    attachment markers when files are present. Use contact for one-to-one
+    conversations or chat_id for a group conversation, but not both. Use this when
+    you need chronological recent context; use tool_fuzzy_search_messages when
+    searching for specific text, and tool_get_chats when you only need group chat
+    IDs.
     """
-    logger.info(f"Getting recent messages: hours={hours}, contact={contact}")
+    logger.info(
+        f"Getting recent messages: hours={hours}, contact={contact}, chat_id={chat_id}"
+    )
     try:
         # Handle contacts that are passed as numbers
         if contact is not None:
             contact = str(contact)
-        result = get_recent_messages(hours=hours, contact=contact)
+        if chat_id is not None:
+            chat_id = str(chat_id)
+        result = get_recent_messages(hours=hours, contact=contact, chat_id=chat_id)
         return result
     except Exception as e:
         logger.error(f"Error in get_recent_messages: {str(e)}")
@@ -86,8 +102,9 @@ def tool_send_message(
         str,
         Field(
             description=(
-                "Phone number, email address, contact name, contact:N selection, "
-                "or Messages chat ID when group_chat is true."
+                "E.164 phone number with leading '+', bare digits with country "
+                "code, email address, contact name, contact:N selection, or "
+                "Messages chat ID when group_chat is true."
             )
         ),
     ],
@@ -211,7 +228,10 @@ def tool_check_contacts(ctx: Context) -> str:
 
         contact_count = len(contacts)
         sample_entries = list(contacts.items())[:10]  # Show first 10 contacts
-        formatted_samples = [f"{number} -> {name}" for number, name in sample_entries]
+        formatted_samples = [
+            f"{_format_phone_for_messages(number) or number} -> {name}"
+            for number, name in sample_entries
+        ]
 
         result = [
             f"Found {contact_count} contacts in AddressBook.",

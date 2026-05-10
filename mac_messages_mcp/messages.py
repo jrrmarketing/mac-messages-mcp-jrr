@@ -1,6 +1,7 @@
 """
 Core functionality for interacting with macOS Messages app
 """
+
 import difflib
 import glob
 import json
@@ -19,13 +20,13 @@ from thefuzz import fuzz
 
 def run_applescript(script: str) -> str:
     """Run an AppleScript and return the result."""
-    proc = subprocess.Popen(['osascript', '-e', script], 
-                            stdout=subprocess.PIPE, 
-                            stderr=subprocess.PIPE)
+    proc = subprocess.Popen(
+        ["osascript", "-e", script], stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
     out, err = proc.communicate()
     if proc.returncode != 0:
         return f"Error: {err.decode('utf-8')}"
-    return out.decode('utf-8').strip()
+    return out.decode("utf-8").strip()
 
 
 def escape_applescript(value: str) -> str:
@@ -50,6 +51,7 @@ def escape_applescript(value: str) -> str:
         .replace("\u2029", "\\n")
     )
 
+
 def get_chat_mapping() -> Dict[str, str]:
     """
     Get mapping from room_name to display_name in chat table.
@@ -69,6 +71,7 @@ def get_chat_mapping() -> Dict[str, str]:
     finally:
         if conn:
             conn.close()
+
 
 def extract_body_from_attributed(attributed_body):
     """
@@ -138,7 +141,9 @@ def extract_body_from_attributed(attributed_body):
         if pos + text_length > len(attributed_body):
             return None
 
-        return attributed_body[pos : pos + text_length].decode("utf-8", errors="replace")
+        return attributed_body[pos : pos + text_length].decode(
+            "utf-8", errors="replace"
+        )
 
     except Exception:
         return None
@@ -149,21 +154,26 @@ def get_messages_db_path() -> str:
     home_dir = os.path.expanduser("~")
     return os.path.join(home_dir, "Library/Messages/chat.db")
 
+
 def query_messages_db(query: str, params: tuple = ()) -> List[Dict[str, Any]]:
     """Query the Messages database and return results as a list of dictionaries."""
     try:
         db_path = get_messages_db_path()
-        
+
         # Check if the database file exists and is accessible
         if not os.path.exists(db_path):
             return [{"error": f"Messages database not found at {db_path}"}]
-            
+
         # Try to connect to the database
         try:
             conn = sqlite3.connect(db_path)
         except sqlite3.OperationalError as e:
-            return [{"error": f"Cannot access Messages database. Please grant Full Disk Access permission to your terminal application in System Preferences > Security & Privacy > Privacy > Full Disk Access. Error: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."}]
-            
+            return [
+                {
+                    "error": f"Cannot access Messages database. Please grant Full Disk Access permission to your terminal application in System Preferences > Security & Privacy > Privacy > Full Disk Access. Error: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
+                }
+            ]
+
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute(query, params)
@@ -172,14 +182,31 @@ def query_messages_db(query: str, params: tuple = ()) -> List[Dict[str, Any]]:
         return results
     except Exception as e:
         return [{"error": str(e)}]
-    
+
+
 def normalize_phone_number(phone: str) -> str:
     """
     Normalize a phone number by removing all non-digit characters.
     """
     if not phone:
         return ""
-    return ''.join(c for c in phone if c.isdigit())
+    return "".join(c for c in phone if c.isdigit())
+
+
+def _format_phone_for_messages(phone: str) -> str:
+    """Return the phone number format Messages resolves most reliably."""
+    normalized = normalize_phone_number(phone)
+    if len(normalized) < 10:
+        return ""
+    if len(normalized) == 10:
+        return f"+1{normalized}"
+    return f"+{normalized}"
+
+
+def _looks_like_phone_input(value: str) -> bool:
+    """True when the input is intended as a phone number, not a contact name."""
+    return bool(value) and all(c.isdigit() or c in "+- ()" for c in value)
+
 
 # Global cache for contacts map
 _CONTACTS_CACHE = None
@@ -188,17 +215,17 @@ _CACHE_TTL = 300  # 5 minutes in seconds
 
 _EMOJI_PATTERN = re.compile(
     "["
-    "\U0001F600-\U0001F64F"  # emoticons
-    "\U0001F300-\U0001F5FF"  # symbols & pictographs
-    "\U0001F680-\U0001F6FF"  # transport & map symbols
-    "\U0001F700-\U0001F77F"  # alchemical symbols
-    "\U0001F780-\U0001F7FF"  # Geometric Shapes
-    "\U0001F800-\U0001F8FF"  # Supplemental Arrows-C
-    "\U0001F900-\U0001F9FF"  # Supplemental Symbols and Pictographs
-    "\U0001FA00-\U0001FA6F"  # Chess Symbols
-    "\U0001FA70-\U0001FAFF"  # Symbols and Pictographs Extended-A
-    "\U00002702-\U000027B0"  # Dingbats
-    "\U000024C2-\U0001F251"
+    "\U0001f600-\U0001f64f"  # emoticons
+    "\U0001f300-\U0001f5ff"  # symbols & pictographs
+    "\U0001f680-\U0001f6ff"  # transport & map symbols
+    "\U0001f700-\U0001f77f"  # alchemical symbols
+    "\U0001f780-\U0001f7ff"  # Geometric Shapes
+    "\U0001f800-\U0001f8ff"  # Supplemental Arrows-C
+    "\U0001f900-\U0001f9ff"  # Supplemental Symbols and Pictographs
+    "\U0001fa00-\U0001fa6f"  # Chess Symbols
+    "\U0001fa70-\U0001faff"  # Symbols and Pictographs Extended-A
+    "\U00002702-\U000027b0"  # Dingbats
+    "\U000024c2-\U0001f251"
     "]+"
 )
 
@@ -218,7 +245,7 @@ def _clean_text(text: str, strip_punctuation: bool = False) -> str:
     text = _EMOJI_PATTERN.sub("", text)
     if strip_punctuation:
         text = re.sub(r"[^\w\s\'\-]", "", text, flags=re.UNICODE)
-    text = re.sub(r'\s+', ' ', text).strip()
+    text = re.sub(r"\s+", " ", text).strip()
     return text
 
 
@@ -244,7 +271,10 @@ def clean_name(name: str) -> str:
     """
     return _clean_text(name, strip_punctuation=True)
 
-def fuzzy_match(query: str, candidates: List[Tuple[str, Any]], threshold: float = 0.6) -> List[Tuple[str, Any, float]]:
+
+def fuzzy_match(
+    query: str, candidates: List[Tuple[str, Any]], threshold: float = 0.6
+) -> List[Tuple[str, Any, float]]:
     """
     Find fuzzy matches between query and a list of candidates using token-based matching.
 
@@ -299,7 +329,7 @@ def fuzzy_match(query: str, candidates: List[Tuple[str, Any]], threshold: float 
                 best_token_score = max(best_token_score, token_score)
 
         # Also try matching query against full name for multi-word queries
-        if ' ' in query or best_token_score < threshold:
+        if " " in query or best_token_score < threshold:
             full_score = difflib.SequenceMatcher(None, query, clean_candidate).ratio()
             best_token_score = max(best_token_score, full_score)
 
@@ -309,21 +339,31 @@ def fuzzy_match(query: str, candidates: List[Tuple[str, Any]], threshold: float 
     # Sort results by score (highest first)
     return sorted(results, key=lambda x: x[2], reverse=True)
 
+
 def query_addressbook_db(query: str, params: tuple = ()) -> List[Dict[str, Any]]:
     """Query the AddressBook database and return results as a list of dictionaries."""
     try:
         # Find the AddressBook database paths
         home_dir = os.path.expanduser("~")
         # Check both the top-level DB and source-specific DBs (iCloud, Google, Exchange, etc.)
-        toplevel_path = os.path.join(home_dir, "Library/Application Support/AddressBook/AddressBook-v22.abcddb")
-        sources_path = os.path.join(home_dir, "Library/Application Support/AddressBook/Sources/*/AddressBook-v22.abcddb")
+        toplevel_path = os.path.join(
+            home_dir, "Library/Application Support/AddressBook/AddressBook-v22.abcddb"
+        )
+        sources_path = os.path.join(
+            home_dir,
+            "Library/Application Support/AddressBook/Sources/*/AddressBook-v22.abcddb",
+        )
         db_paths = glob.glob(sources_path)
         if os.path.exists(toplevel_path):
             db_paths.append(toplevel_path)
 
         if not db_paths:
-            return [{"error": f"AddressBook database not found at {sources_path} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."}]
-        
+            return [
+                {
+                    "error": f"AddressBook database not found at {sources_path} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
+                }
+            ]
+
         # Try each database path until one works
         all_results = []
         for db_path in db_paths:
@@ -339,13 +379,18 @@ def query_addressbook_db(query: str, params: tuple = ()) -> List[Dict[str, Any]]
                 # If we can't access this one, try the next database
                 print(f"Warning: Cannot access {db_path}: {str(e)}")
                 continue
-        
+
         if not all_results and len(db_paths) > 0:
-            return [{"error": f"Could not access any AddressBook databases. Please grant Full Disk Access permission. PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."}]
-            
+            return [
+                {
+                    "error": f"Could not access any AddressBook databases. Please grant Full Disk Access permission. PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
+                }
+            ]
+
         return all_results
     except Exception as e:
         return [{"error": str(e)}]
+
 
 def get_addressbook_contacts() -> Dict[str, str]:
     """
@@ -353,7 +398,7 @@ def get_addressbook_contacts() -> Dict[str, str]:
     Returns a dictionary mapping normalized phone numbers to contact names.
     """
     contacts_map = {}
-    
+
     # Define the query to get contact names, nicknames, and phone numbers
     phone_query = """
     SELECT
@@ -392,9 +437,12 @@ def get_addressbook_contacts() -> Dict[str, str]:
     try:
         # For testing/fallback, parse the user-provided examples in cases where direct DB access fails
         # This is a temporary workaround until full disk access is granted
-        if 'USE_TEST_DATA' in os.environ and os.environ['USE_TEST_DATA'].lower() == 'true':
+        if (
+            "USE_TEST_DATA" in os.environ
+            and os.environ["USE_TEST_DATA"].lower() == "true"
+        ):
             contacts = [
-                {"first_name":"TEST", "last_name":"TEST", "phone":"+11111111111"}
+                {"first_name": "TEST", "last_name": "TEST", "phone": "+11111111111"}
             ]
             return process_contacts(contacts)
 
@@ -408,13 +456,16 @@ def get_addressbook_contacts() -> Dict[str, str]:
 
         # Also query email addresses for email-based iMessage handles
         email_results = query_addressbook_db(email_query)
-        if email_results and not (len(email_results) > 0 and "error" in email_results[0]):
+        if email_results and not (
+            len(email_results) > 0 and "error" in email_results[0]
+        ):
             results.extend(email_results)
 
         return process_contacts(results)
     except Exception as e:
         print(f"Error getting AddressBook contacts: {str(e)}")
         return {}
+
 
 def process_contacts(contacts) -> Dict[str, str]:
     """Process contact records into a normalized phone -> name map"""
@@ -444,7 +495,7 @@ def process_contacts(contacts) -> Dict[str, str]:
                     "first_name": first_name.strip(),
                     "last_name": last_name.strip(),
                     "nickname": nickname.strip(),
-                    "full_name": full_name
+                    "full_name": full_name,
                 }
 
                 if full_name not in name_to_numbers:
@@ -470,7 +521,7 @@ def process_contacts(contacts) -> Dict[str, str]:
                     "first_name": first_name.strip(),
                     "last_name": last_name.strip(),
                     "nickname": nickname.strip(),
-                    "full_name": full_name
+                    "full_name": full_name,
                 }
 
                 # Add to reverse lookup
@@ -489,13 +540,14 @@ def process_contacts(contacts) -> Dict[str, str]:
 
     return contacts_map
 
+
 def get_addressbook_contacts_subprocess() -> Dict[str, str]:
     """
     Legacy method to get contacts using subprocess.
     Only used as fallback when direct database access fails.
     """
     contacts_map = {}
-    
+
     try:
         # Form the SQL query to execute via command line
         cmd = """
@@ -514,36 +566,36 @@ def get_addressbook_contacts_subprocess() -> Dict[str, str]:
             ZABCDPHONENUMBER.ZORDERINGINDEX ASC;
         EOF
         """
-        
+
         # Execute the command
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        
+
         if result.returncode == 0:
             # Parse the JSON output line by line (it's a series of JSON objects)
-            for line in result.stdout.strip().split('\n'):
+            for line in result.stdout.strip().split("\n"):
                 if not line.strip():
                     continue
-                
+
                 # Remove trailing commas that might cause JSON parsing errors
-                line = line.rstrip(',')
-                
+                line = line.rstrip(",")
+
                 try:
                     contact = json.loads(line)
                     first_name = contact.get("FIRST NAME", "")
                     last_name = contact.get("LAST NAME", "")
                     phone = contact.get("FULL NUMBER", "")
-                    
+
                     # Process contact as in the main method
                     if not phone:
                         continue
-                        
+
                     if "X-IMAGETYPE" in phone:
                         phone = phone.split("X-IMAGETYPE")[0]
-                    
+
                     full_name = " ".join(filter(None, [first_name, last_name]))
                     if not full_name.strip():
                         continue
-                    
+
                     normalized_phone = normalize_phone_number(phone)
                     if normalized_phone:
                         contacts_map[normalized_phone] = full_name
@@ -551,24 +603,29 @@ def get_addressbook_contacts_subprocess() -> Dict[str, str]:
                     # Skip individual lines that fail to parse
                     continue
     except Exception as e:
-        print(f"Error getting AddressBook contacts via subprocess: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE.")
-    
+        print(
+            f"Error getting AddressBook contacts via subprocess: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
+        )
+
     return contacts_map
+
 
 # Global variables for contact lookup
 _NAME_TO_NUMBERS_MAP = {}
 _PHONE_TO_DETAILS_MAP = {}  # phone -> {first_name, last_name, nickname, full_name}
 
+
 def get_cached_contacts() -> Dict[str, str]:
     """Get cached contacts map or refresh if needed"""
     global _CONTACTS_CACHE, _LAST_CACHE_UPDATE
-    
+
     current_time = time.time()
     if _CONTACTS_CACHE is None or (current_time - _LAST_CACHE_UPDATE) > _CACHE_TTL:
         _CONTACTS_CACHE = get_addressbook_contacts()
         _LAST_CACHE_UPDATE = current_time
-    
+
     return _CONTACTS_CACHE
+
 
 def find_contact_by_name(name: str) -> List[Dict[str, Any]]:
     """
@@ -608,99 +665,117 @@ def find_contact_by_name(name: str) -> List[Dict[str, Any]]:
         if phone not in seen_phones or score > seen_phones[phone]["score"]:
             # Get the display name (full name, not nickname)
             display_name = contacts.get(phone, matched_name)
+            display_phone = (
+                phone if "@" in phone else (_format_phone_for_messages(phone) or phone)
+            )
             seen_phones[phone] = {
                 "name": display_name,
-                "phone": phone,
+                "phone": display_phone,
                 "score": score,
-                "matched_on": matched_name  # What actually matched (name or nickname)
+                "matched_on": matched_name,  # What actually matched (name or nickname)
             }
 
     # Convert to sorted list
     results = sorted(seen_phones.values(), key=lambda x: x["score"], reverse=True)
     return results
 
+
 def send_message(recipient: str, message: str, group_chat: bool = False) -> str:
     """
     Send a message using the Messages app with improved contact resolution.
-    
+
     Args:
         recipient: Phone number, email, contact name, or special format for contact selection
                   Use "contact:N" to select the Nth contact from a previous ambiguous match
                   For group chats, use the chat ID from tool_get_chats (e.g., "chat123456789")
         message: Message text to send
         group_chat: Whether this is a group chat (uses chat ID instead of buddy)
-    
+
     Returns:
         Success or error message
     """
     # Convert to string to ensure phone numbers work properly
     recipient = str(recipient).strip()
-    
+
     # For group chats, skip contact lookup and use the chat ID directly
     if group_chat:
         # Use the recipient directly as the chat ID
         return _send_message_to_recipient(recipient, message, group_chat=True)
-    
+
     # Handle contact selection format (contact:N)
     if recipient.lower().startswith("contact:"):
         try:
             # Get the selected index (1-based)
             index = int(recipient.split(":", 1)[1].strip()) - 1
-            
+
             # Get the most recent contact matches from global cache
-            if not hasattr(send_message, "recent_matches") or not send_message.recent_matches:
+            if (
+                not hasattr(send_message, "recent_matches")
+                or not send_message.recent_matches
+            ):
                 return "No recent contact matches available. Please search for a contact first."
-            
+
             if index < 0 or index >= len(send_message.recent_matches):
                 return f"Invalid selection. Please choose a number between 1 and {len(send_message.recent_matches)}."
-            
+
             # Get the selected contact
             contact = send_message.recent_matches[index]
-            return _send_message_to_recipient(contact['phone'], message, contact['name'], group_chat=False)
+            return _send_message_to_recipient(
+                contact["phone"], message, contact["name"], group_chat=False
+            )
         except (ValueError, IndexError) as e:
             return f"Error selecting contact: {str(e)}"
-    
-    # Check if recipient is directly a phone number
-    if all(c.isdigit() or c in '+- ()' for c in recipient):
-        # Clean the phone number
-        clean_number = normalize_phone_number(recipient)
-        return _send_message_to_recipient(clean_number, message, group_chat=False)
+
+    # Check if recipient is directly a phone number.
+    if _looks_like_phone_input(recipient):
+        formatted_number = _format_phone_for_messages(recipient)
+        if not formatted_number:
+            return "Error: Phone recipients must be E.164-style numbers with at least 10 digits, such as +14155551234."
+        return _send_message_to_recipient(formatted_number, message, group_chat=False)
 
     # Check if recipient is an email address
     if "@" in recipient:
         return _send_message_to_recipient(recipient, message, group_chat=False)
-    
+
     # Try to find the contact by name
     contacts = find_contact_by_name(recipient)
-    
+
     if not contacts:
         return f"Error: Could not find any contact matching '{recipient}'"
-    
+
     if len(contacts) == 1:
         # Single match, use it
         contact = contacts[0]
-        return _send_message_to_recipient(contact['phone'], message, contact['name'], group_chat=False)
+        return _send_message_to_recipient(
+            contact["phone"], message, contact["name"], group_chat=False
+        )
     else:
         # Store the matches for later selection
         send_message.recent_matches = contacts
-        
+
         # Multiple matches, return them all
-        contact_list = "\n".join([f"{i+1}. {c['name']} ({c['phone']})" for i, c in enumerate(contacts[:10])])
+        contact_list = "\n".join(
+            [f"{i+1}. {c['name']} ({c['phone']})" for i, c in enumerate(contacts[:10])]
+        )
         return f"Multiple contacts found matching '{recipient}'. Please specify which one using 'contact:N' where N is the number:\n{contact_list}"
+
 
 # Initialize the static variable for recent matches
 send_message.recent_matches = []
 
-def _send_message_to_recipient(recipient: str, message: str, contact_name: str = None, group_chat: bool = False) -> str:
+
+def _send_message_to_recipient(
+    recipient: str, message: str, contact_name: str = None, group_chat: bool = False
+) -> str:
     """
     Internal function to send a message to a specific recipient using file-based approach.
-    
+
     Args:
         recipient: Phone number or email
         message: Message text to send
         contact_name: Optional contact name for the success message
         group_chat: Whether this is a group chat
-    
+
     Returns:
         Success or error message
     """
@@ -708,11 +783,11 @@ def _send_message_to_recipient(recipient: str, message: str, contact_name: str =
     file_path = None
     try:
         # Create a unique temporary file with the message content
-        tmp = tempfile.NamedTemporaryFile(suffix='.txt', delete=False)
+        tmp = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
         file_path = tmp.name
         safe_file_path = escape_applescript(file_path)
         try:
-            tmp.write(message.encode('utf-8'))
+            tmp.write(message.encode("utf-8"))
         finally:
             tmp.close()
 
@@ -725,7 +800,7 @@ def _send_message_to_recipient(recipient: str, message: str, contact_name: str =
             # the latter looks up by the chat's display name and fails for guid-style
             # identifiers (raises -1728 "Can't get chat …").
             command = f'tell application "Messages" to send (read (POSIX file "{safe_file_path}") as «class utf8») to chat id "{safe_recipient}"'
-        
+
         # Run the AppleScript
         result = run_applescript(command)
 
@@ -748,29 +823,30 @@ def _send_message_to_recipient(recipient: str, message: str, contact_name: str =
             except OSError:
                 pass
 
+
 def get_contact_name(handle_id: int) -> str:
     """
     Get contact name from handle_id with improved contact lookup.
     """
     if handle_id is None:
         return "Unknown"
-        
+
     # First, get the phone number or email
     handle_query = """
     SELECT id FROM handle WHERE ROWID = ?
     """
     handles = query_messages_db(handle_query, (handle_id,))
-    
+
     if not handles or "error" in handles[0]:
         return "Unknown"
-    
+
     handle_id_value = handles[0]["id"]
-    
+
     # Try to match with AddressBook contacts
     contacts = get_cached_contacts()
 
     # Check if handle is an email address (contains @ and no leading +)
-    if '@' in handle_id_value:
+    if "@" in handle_id_value:
         email_lower = handle_id_value.strip().lower()
         if email_lower in contacts:
             return contacts[email_lower]
@@ -782,15 +858,15 @@ def get_contact_name(handle_id: int) -> str:
             return contacts[normalized_handle]
 
         # Sometimes numbers in the addressbook have the country code, but messages don't
-        if normalized_handle.startswith('1') and len(normalized_handle) > 10:
+        if normalized_handle.startswith("1") and len(normalized_handle) > 10:
             # Try without country code
             if normalized_handle[1:] in contacts:
                 return contacts[normalized_handle[1:]]
         elif len(normalized_handle) == 10:  # US number without country code
             # Try with country code
-            if '1' + normalized_handle in contacts:
-                return contacts['1' + normalized_handle]
-    
+            if "1" + normalized_handle in contacts:
+                return contacts["1" + normalized_handle]
+
     # If no match found in AddressBook, fall back to display name from chat
     contact_query = """
     SELECT 
@@ -805,43 +881,99 @@ def get_contact_name(handle_id: int) -> str:
         h.id = ? 
     LIMIT 1
     """
-    
+
     contacts = query_messages_db(contact_query, (handle_id_value,))
-    
-    if contacts and len(contacts) > 0 and "display_name" in contacts[0] and contacts[0]["display_name"]:
+
+    if (
+        contacts
+        and len(contacts) > 0
+        and "display_name" in contacts[0]
+        and contacts[0]["display_name"]
+    ):
         return contacts[0]["display_name"]
-    
+
     # If no contact name found, return the phone number or email
     return handle_id_value
 
-def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
+
+def _find_chat_by_identifier(chat_id: str) -> Optional[Dict[str, Any]]:
+    """Find a Messages chat row by chat_identifier or room_name."""
+    chat_id = str(chat_id).strip()
+    if not chat_id:
+        return None
+
+    variants = {chat_id}
+    if chat_id.startswith("chat"):
+        variants.add(f"iMessage;-;{chat_id}")
+        variants.add(f"iMessage;+;{chat_id}")
+    elif chat_id.startswith("iMessage;"):
+        short_id = chat_id.rsplit(";", 1)[-1]
+        if short_id.startswith("chat"):
+            variants.add(short_id)
+
+    placeholders = ", ".join(["?" for _ in variants])
+    query = f"""
+    SELECT ROWID, display_name, chat_identifier, room_name
+    FROM chat
+    WHERE chat_identifier IN ({placeholders})
+       OR room_name IN ({placeholders})
+    LIMIT 1
+    """
+    params = tuple(variants) + tuple(variants)
+    rows = query_messages_db(query, params)
+    if not rows or "error" in rows[0]:
+        return None
+    return rows[0]
+
+
+def get_recent_messages(
+    hours: int = 24,
+    contact: Optional[str] = None,
+    chat_id: Optional[str] = None,
+) -> str:
     """
     Get recent messages from the Messages app using attributedBody for content.
-    
+
     Args:
         hours: Number of hours to look back (default: 24)
         contact: Filter by contact name, phone number, or email (optional)
                 Use "contact:N" to select a specific contact from previous matches
-    
+        chat_id: Filter by group chat identifier from tool_get_chats (optional)
+
     Returns:
         Formatted string with recent messages
     """
     # Input validation
     if hours < 0:
         return "Error: Hours cannot be negative. Please provide a positive number."
-    
+
     # Prevent integer overflow - limit to reasonable maximum (10 years)
     MAX_HOURS = 10 * 365 * 24  # 87,600 hours
     if hours > MAX_HOURS:
         return f"Error: Hours value too large. Maximum allowed is {MAX_HOURS} hours (10 years)."
-    
+
+    if contact and chat_id:
+        return "Error: Provide either contact or chat_id, not both."
+
     handle_ids = None
-    
+    chat_row_id = None
+    chat_display_name = None
+
+    if chat_id:
+        chat_id = str(chat_id).strip()
+        if not chat_id:
+            return "Error: chat_id cannot be empty."
+        chat = _find_chat_by_identifier(chat_id)
+        if not chat:
+            return f"No group chat found with chat_id '{chat_id}'. Use tool_get_chats to list available group chats."
+        chat_row_id = chat["ROWID"]
+        chat_display_name = chat.get("display_name") or chat_id
+
     # If contact is specified, try to resolve it
     if contact:
         # Convert to string to ensure phone numbers work properly
         contact = str(contact).strip()
-        
+
         # Handle contact selection format (contact:N)
         if contact.lower().startswith("contact:"):
             try:
@@ -849,52 +981,60 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
                 contact_parts = contact.split(":", 1)
                 if len(contact_parts) < 2 or not contact_parts[1].strip():
                     return "Error: Invalid contact selection format. Use 'contact:N' where N is a positive number."
-                
+
                 # Get the selected index (1-based)
                 try:
                     index = int(contact_parts[1].strip()) - 1
                 except ValueError:
                     return "Error: Contact selection must be a number. Use 'contact:N' where N is a positive number."
-                
+
                 # Validate index is not negative
                 if index < 0:
                     return "Error: Contact selection must be a positive number (starting from 1)."
-                
+
                 # Get the most recent contact matches from global cache
-                if not hasattr(get_recent_messages, "recent_matches") or not get_recent_messages.recent_matches:
+                if (
+                    not hasattr(get_recent_messages, "recent_matches")
+                    or not get_recent_messages.recent_matches
+                ):
                     return "No recent contact matches available. Please search for a contact first."
-                
+
                 if index >= len(get_recent_messages.recent_matches):
                     return f"Invalid selection. Please choose a number between 1 and {len(get_recent_messages.recent_matches)}."
-                
+
                 # Get the selected contact's phone number
-                contact = get_recent_messages.recent_matches[index]['phone']
+                contact = get_recent_messages.recent_matches[index]["phone"]
             except Exception as e:
                 return f"Error processing contact selection: {str(e)}"
-        
+
         # Check if contact might be a name rather than a phone number or email
         # If any character is NOT a phone/email character, treat as a name
-        if not all(c.isdigit() or c in '+- ()@.' for c in contact):
+        if not all(c.isdigit() or c in "+- ()@." for c in contact):
             # Try fuzzy matching
             matches = find_contact_by_name(contact)
-            
+
             if not matches:
                 return f"No contacts found matching '{contact}'."
-            
+
             if len(matches) == 1:
                 # Single match, use its phone number
-                contact = matches[0]['phone']
+                contact = matches[0]["phone"]
             else:
                 # Store the matches for later selection
                 get_recent_messages.recent_matches = matches
-                
+
                 # Multiple matches, return them all
-                contact_list = "\n".join([f"{i+1}. {c['name']} ({c['phone']})" for i, c in enumerate(matches[:10])])
+                contact_list = "\n".join(
+                    [
+                        f"{i+1}. {c['name']} ({c['phone']})"
+                        for i, c in enumerate(matches[:10])
+                    ]
+                )
                 return f"Multiple contacts found matching '{contact}'. Please specify which one using 'contact:N' where N is the number:\n{contact_list}"
-        
+
         # At this point, contact should be a phone number or email
         # Try to find handle_ids with improved phone number matching
-        if '@' in contact:
+        if "@" in contact:
             # This is an email
             query = "SELECT ROWID FROM handle WHERE id = ?"
             results = query_messages_db(query, (contact,))
@@ -903,7 +1043,7 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
         else:
             # This is a phone number - try various formats (returns all handles for multi-protocol)
             handle_ids = find_handles_by_phone(contact)
-            
+
         if not handle_ids:
             # Try a direct search in message table to see if any messages exist
             normalized = normalize_phone_number(contact)
@@ -914,19 +1054,23 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
             WHERE h.id LIKE ?
             """
             results = query_messages_db(query, (f"%{normalized}%",))
-            
-            if results and not "error" in results[0] and results[0].get("count", 0) == 0:
+
+            if (
+                results
+                and not "error" in results[0]
+                and results[0].get("count", 0) == 0
+            ):
                 # No messages found but the query was valid
                 return f"No message history found with '{contact}'."
             else:
                 # Could not find the handle at all
                 return f"Could not find any messages with contact '{contact}'. Verify the phone number or email is correct."
-    
+
     # Calculate the timestamp for X hours ago
     hours_ago = datetime.now(timezone.utc) - timedelta(hours=hours)
     # String-bind the Apple-ns timestamp to avoid SQLite integer overflow.
     timestamp_str = str(_to_apple_ns(hours_ago))
-    
+
     # Build the SQL query - use attributedBody field and text
     query = """
     SELECT 
@@ -942,27 +1086,31 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
     WHERE 
         CAST(m.date AS TEXT) > ? 
     """
-    
+
     params = [timestamp_str]
-    
+
     # Add contact filter if handle_ids were found (support multiple handles for multi-protocol)
     if handle_ids:
         placeholders = ", ".join(["?" for _ in handle_ids])
         query += f"AND m.handle_id IN ({placeholders}) "
         params.extend(handle_ids)
-    
+
+    if chat_row_id is not None:
+        query += "AND m.ROWID IN (SELECT message_id FROM chat_message_join WHERE chat_id = ?) "
+        params.append(chat_row_id)
+
     query += "ORDER BY m.date DESC LIMIT 100"
-    
+
     # Execute the query
     messages = query_messages_db(query, tuple(params))
-    
+
     # Format the results
     if not messages:
         return "No messages found in the specified time period."
-    
+
     if "error" in messages[0]:
         return f"Error accessing messages: {messages[0]['error']}"
-    
+
     # Get chat mapping for group chat names
     chat_mapping = get_chat_mapping()
 
@@ -973,10 +1121,10 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
     formatted_messages = []
     for msg in messages:
         # Get the message content from text or attributedBody
-        if msg.get('text'):
-            body = msg['text']
-        elif msg.get('attributedBody'):
-            body = extract_body_from_attributed(msg['attributedBody'])
+        if msg.get("text"):
+            body = msg["text"]
+        elif msg.get("attributedBody"):
+            body = extract_body_from_attributed(msg["attributedBody"])
             if not body:
                 # Skip messages with no content
                 continue
@@ -997,8 +1145,10 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
 
         # Check if this is a group chat
         group_chat_name = None
-        if msg.get('cache_roomnames'):
-            group_chat_name = chat_mapping.get(msg['cache_roomnames'])
+        if msg.get("cache_roomnames"):
+            group_chat_name = chat_mapping.get(msg["cache_roomnames"])
+        if not group_chat_name and chat_display_name:
+            group_chat_name = chat_display_name
 
         message_prefix = f"[{date_str}]"
         if group_chat_name:
@@ -1011,11 +1161,12 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
         formatted_messages.append(
             f"{message_prefix} {direction}: {body}{attachment_summary}"
         )
-    
+
     if not formatted_messages:
         return "No messages found in the specified time period."
-        
+
     return "\n".join(formatted_messages)
+
 
 # Initialize the static variable for recent matches
 get_recent_messages.recent_matches = []
@@ -1138,7 +1289,9 @@ def fuzzy_search_messages(
             score_normalised = 1.0
         else:
             # Pass 2: fuzzy match via WRatio
-            score_from_thefuzz = fuzz.WRatio(cleaned_search_term, cleaned_candidate_text)
+            score_from_thefuzz = fuzz.WRatio(
+                cleaned_search_term, cleaned_candidate_text
+            )
             if score_from_thefuzz < scaled_threshold:
                 continue
             score_normalised = score_from_thefuzz / 100.0
@@ -1160,7 +1313,9 @@ def fuzzy_search_messages(
 
     # Bulk-fetch attachments for all matched message ROWIDs (Tier 1 progressive disclosure).
     matched_ids = [
-        m[1]["ROWID"] for m in matched_messages_with_scores if m[1].get("ROWID") is not None
+        m[1]["ROWID"]
+        for m in matched_messages_with_scores
+        if m[1].get("ROWID") is not None
     ]
     attachments_by_msg = _attachments_for_message_ids(matched_ids)
 
@@ -1206,16 +1361,16 @@ def fuzzy_search_messages(
 def _check_imessage_availability(recipient: str) -> bool:
     """
     Check if recipient has iMessage available by querying the messages database.
-    
+
     Args:
         recipient: Phone number or email to check
-        
+
     Returns:
         True if iMessage is available, False otherwise
     """
     query_params = ()
 
-    if '@' in recipient:
+    if "@" in recipient:
         placeholders = "?"
         query_params = (recipient,)
     else:
@@ -1225,7 +1380,7 @@ def _check_imessage_availability(recipient: str) -> bool:
             return False
 
         query_params = tuple(_get_phone_formats(normalized))
-        placeholders = ', '.join(['?' for _ in query_params])
+        placeholders = ", ".join(["?" for _ in query_params])
 
     query = f"""
         SELECT 
@@ -1240,40 +1395,41 @@ def _check_imessage_availability(recipient: str) -> bool:
             h.ROWID,
             h.service
         """
-    
+
     result = query_messages_db(query, query_params)
-    
+
     if not result or "error" in result[0]:
         return False
-        
+
     for row in result:
-        service_type = row.get('service', '')
-        text_count = row.get('text_count', 0)
-        num_errors = row.get('errors', 0)
+        service_type = row.get("service", "")
+        text_count = row.get("text_count", 0)
+        num_errors = row.get("errors", 0)
 
         # Only count as iMessage available if there were successful messages (errors < total)
         if num_errors < text_count:
-            if service_type in ('iMessage', 'iMessageLite'):
+            if service_type in ("iMessage", "iMessageLite"):
                 return True
 
     return False
 
+
 def _send_message_sms(recipient: str, message: str, contact_name: str = None) -> str:
     """
     Send message via SMS/RCS using AppleScript.
-    
+
     Args:
         recipient: Phone number to send to
         message: Message content
         contact_name: Optional contact name for display
-        
+
     Returns:
         Success or error message
     """
     safe_message = escape_applescript(message)
     safe_recipient = escape_applescript(recipient)
-    
-    script = f'''
+
+    script = f"""
     tell application "Messages"
         try
             -- Try to find SMS service
@@ -1290,8 +1446,8 @@ def _send_message_sms(recipient: str, message: str, contact_name: str = None) ->
             return "error:" & errMsg
         end try
     end tell
-    '''
-    
+    """
+
     try:
         result = run_applescript(script)
         if result.startswith("error:"):
@@ -1304,23 +1460,24 @@ def _send_message_sms(recipient: str, message: str, contact_name: str = None) ->
     except Exception as e:
         return f"Error sending SMS: {str(e)}"
 
+
 def _send_message_direct(
     recipient: str, message: str, contact_name: str = None, group_chat: bool = False
 ) -> str:
     """
     Enhanced direct AppleScript method for sending messages with SMS/RCS fallback.
-    
+
     This function implements automatic fallback from iMessage to SMS/RCS when:
     1. Recipient doesn't have iMessage
     2. iMessage delivery fails
     3. iMessage service is unavailable
-    
+
     Args:
         recipient: Phone number or email
         message: Message content
         contact_name: Optional contact name for display
         group_chat: Whether this is a group chat
-        
+
     Returns:
         Success or error message with service type used
     """
@@ -1328,10 +1485,10 @@ def _send_message_direct(
     # handles newlines, tabs, and Unicode line/paragraph separators.
     safe_message = escape_applescript(message)
     safe_recipient = escape_applescript(recipient)
-    
+
     # For group chats, stick to iMessage only (SMS doesn't support group chats well)
     if group_chat:
-        script = f'''
+        script = f"""
         tell application "Messages"
             try
                 -- Try to get the existing chat by its full id (e.g. "iMessage;+;chat123…").
@@ -1352,8 +1509,8 @@ def _send_message_direct(
                 return "error:" & errMsg
             end try
         end tell
-        '''
-        
+        """
+
         try:
             result = run_applescript(script)
             if result.startswith("error:"):
@@ -1365,10 +1522,10 @@ def _send_message_direct(
                 return f"Unknown group message result: {result}"
         except Exception as e:
             return f"Error sending group message: {str(e)}"
-    
+
     # For individual messages, try iMessage first with automatic SMS fallback
     # Enhanced AppleScript with built-in fallback logic
-    script = f'''
+    script = f"""
     tell application "Messages"
         try
             -- First, try iMessage
@@ -1412,12 +1569,12 @@ def _send_message_direct(
             return "error:" & generalErr
         end try
     end tell
-    '''
-    
+    """
+
     try:
         result = run_applescript(script)
         display_name = contact_name if contact_name else recipient
-        
+
         if result.startswith("error:"):
             return f"Error sending message: {result[6:]}"
         elif result.strip() == "success:iMessage":
@@ -1431,21 +1588,22 @@ def _send_message_direct(
     except Exception as e:
         return f"Error sending message: {str(e)}"
 
+
 def check_messages_db_access() -> str:
     """Check if the Messages database is accessible and return detailed information."""
     try:
         db_path = get_messages_db_path()
         status = []
-        
+
         # Check if the file exists
         if not os.path.exists(db_path):
             return f"ERROR: Messages database not found at {db_path} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
-        
+
         status.append(f"Database file exists at: {db_path}")
-        
+
         # Check file permissions
         try:
-            with open(db_path, 'rb') as f:
+            with open(db_path, "rb") as f:
                 # Just try to read a byte to confirm access
                 f.read(1)
             status.append("File is readable")
@@ -1453,34 +1611,39 @@ def check_messages_db_access() -> str:
             return f"ERROR: Permission denied when trying to read {db_path}. Please grant Full Disk Access permission to your terminal application. PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
         except Exception as e:
             return f"ERROR: Unknown error reading file: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
-        
+
         # Try to connect to the database
         try:
             conn = sqlite3.connect(db_path)
             status.append("Successfully connected to database")
-            
+
             # Test a simple query
             cursor = conn.cursor()
             cursor.execute("SELECT count(*) FROM sqlite_master")
             count = cursor.fetchone()[0]
             status.append(f"Database contains {count} tables")
-            
+
             # Check if the necessary tables exist
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('message', 'handle', 'chat')")
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('message', 'handle', 'chat')"
+            )
             tables = [row[0] for row in cursor.fetchall()]
-            if 'message' in tables and 'handle' in tables:
+            if "message" in tables and "handle" in tables:
                 status.append("Required tables (message, handle) are present")
             else:
-                status.append(f"WARNING: Some required tables are missing. Found: {', '.join(tables)}")
-            
+                status.append(
+                    f"WARNING: Some required tables are missing. Found: {', '.join(tables)}"
+                )
+
             conn.close()
         except sqlite3.OperationalError as e:
             return f"ERROR: Database connection error: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
-        
+
         return "\n".join(status)
     except Exception as e:
         return f"ERROR: Unexpected error during database access check: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
-    
+
+
 def _get_phone_formats(recipient: str) -> List[str]:
     """
     Get different phone recipient formats. Assumes the recipient given has already been normalized.
@@ -1493,28 +1656,29 @@ def _get_phone_formats(recipient: str) -> List[str]:
     """
     # Start with the normalized input
     formats_to_try = [recipient]
-    
+
     # For US recipients, try with and without country code
-    if recipient.startswith('1') and len(recipient) > 10:
+    if recipient.startswith("1") and len(recipient) > 10:
         # Try without the country code
         formats_to_try.append(recipient[1:])
-        formats_to_try.append('+' + recipient)
+        formats_to_try.append("+" + recipient)
 
     elif len(recipient) == 10:
         # Try with the country code
-        formats_to_try.append('1' + recipient)
-        formats_to_try.append('+1' + recipient)
+        formats_to_try.append("1" + recipient)
+        formats_to_try.append("+1" + recipient)
 
     return formats_to_try
+
 
 def find_handle_by_phone(phone: str) -> Optional[int]:
     """
     Find a handle ID by phone number, trying various formats.
     Prioritizes direct message handles over group chat handles.
-    
+
     Args:
         phone: Phone number in any format
-        
+
     Returns:
         handle_id if found, None otherwise
     """
@@ -1523,14 +1687,15 @@ def find_handle_by_phone(phone: str) -> Optional[int]:
         return handles[0]
     return None
 
+
 def find_handles_by_phone(phone: str) -> Optional[List[int]]:
     """
     Find all handle IDs by phone number, trying various formats.
     Returns all handles for multi-protocol support (iMessage, SMS, RCS).
-    
+
     Args:
         phone: Phone number in any format
-        
+
     Returns:
         List of handle_id's if found, None otherwise
     """
@@ -1538,11 +1703,11 @@ def find_handles_by_phone(phone: str) -> Optional[List[int]]:
     normalized = normalize_phone_number(phone)
     if not normalized:
         return None
-    
+
     # Try various formats for US numbers
     formats_to_try = _get_phone_formats(normalized)
 
-    placeholders = ', '.join(['?' for _ in formats_to_try])
+    placeholders = ", ".join(["?" for _ in formats_to_try])
 
     # Finds all handle_id's associated with the number
     query = f"""
@@ -1551,91 +1716,112 @@ def find_handles_by_phone(phone: str) -> Optional[List[int]]:
     FROM handle
     WHERE id IN ({placeholders})
     """
-    
+
     results = query_messages_db(query, tuple(formats_to_try))
-    
+
     if not results or "error" in results[0]:
         return None
-    
+
     if len(results) == 0:
         return None
-    
+
     return [row["ROWID"] for row in results]
+
 
 def check_addressbook_access() -> str:
     """Check if the AddressBook database is accessible and return detailed information."""
     try:
         home_dir = os.path.expanduser("~")
-        sources_path = os.path.join(home_dir, "Library/Application Support/AddressBook/Sources")
+        sources_path = os.path.join(
+            home_dir, "Library/Application Support/AddressBook/Sources"
+        )
         status = []
-        
+
         # Check if the directory exists
         if not os.path.exists(sources_path):
             return f"ERROR: AddressBook Sources directory not found at {sources_path} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
-        
+
         status.append(f"AddressBook Sources directory exists at: {sources_path}")
-        
+
         # Find database files
         db_paths = glob.glob(os.path.join(sources_path, "*/AddressBook-v22.abcddb"))
-        
+
         if not db_paths:
             return f"ERROR: No AddressBook database files found in {sources_path} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
-        
+
         status.append(f"Found {len(db_paths)} AddressBook database files:")
         for path in db_paths:
             status.append(f" - {path}")
-        
+
         # Check file permissions for each database
         for db_path in db_paths:
             try:
-                with open(db_path, 'rb') as f:
+                with open(db_path, "rb") as f:
                     # Just try to read a byte to confirm access
                     f.read(1)
                 status.append(f"File is readable: {db_path}")
             except PermissionError:
-                status.append(f"ERROR: Permission denied when trying to read {db_path} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE.")
+                status.append(
+                    f"ERROR: Permission denied when trying to read {db_path} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
+                )
                 continue
             except Exception as e:
-                status.append(f"ERROR: Unknown error reading file {db_path}: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE.")
+                status.append(
+                    f"ERROR: Unknown error reading file {db_path}: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
+                )
                 continue
-            
+
             # Try to connect to the database
             try:
                 conn = sqlite3.connect(db_path)
                 status.append(f"Successfully connected to database: {db_path}")
-                
+
                 # Test a simple query
                 cursor = conn.cursor()
                 cursor.execute("SELECT count(*) FROM sqlite_master")
                 count = cursor.fetchone()[0]
                 status.append(f"Database contains {count} tables")
-                
+
                 # Check if the necessary tables exist
-                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('ZABCDRECORD', 'ZABCDPHONENUMBER')")
+                cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('ZABCDRECORD', 'ZABCDPHONENUMBER')"
+                )
                 tables = [row[0] for row in cursor.fetchall()]
-                if 'ZABCDRECORD' in tables and 'ZABCDPHONENUMBER' in tables:
-                    status.append("Required tables (ZABCDRECORD, ZABCDPHONENUMBER) are present")
+                if "ZABCDRECORD" in tables and "ZABCDPHONENUMBER" in tables:
+                    status.append(
+                        "Required tables (ZABCDRECORD, ZABCDPHONENUMBER) are present"
+                    )
                 else:
-                    status.append(f"WARNING: Some required tables are missing. Found: {', '.join(tables)}")
-                
+                    status.append(
+                        f"WARNING: Some required tables are missing. Found: {', '.join(tables)}"
+                    )
+
                 # Get a count of contacts
                 try:
                     cursor.execute("SELECT COUNT(*) FROM ZABCDRECORD")
                     contact_count = cursor.fetchone()[0]
                     status.append(f"Database contains {contact_count} contacts")
                 except sqlite3.OperationalError:
-                    status.append("Could not query contact count PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE.")
-                
+                    status.append(
+                        "Could not query contact count PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
+                    )
+
                 conn.close()
             except sqlite3.OperationalError as e:
-                status.append(f"ERROR: Database connection error for {db_path}: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE.")
-        
+                status.append(
+                    f"ERROR: Database connection error for {db_path}: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
+                )
+
         # Try to get actual contacts
         contacts = get_addressbook_contacts()
         if contacts:
-            status.append(f"Successfully retrieved {len(contacts)} contacts with phone numbers")
+            status.append(
+                f"Successfully retrieved {len(contacts)} contacts with phone numbers"
+            )
         else:
-            status.append("WARNING: No contacts with phone numbers found. PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE.")
+            status.append(
+                "WARNING: No contacts with phone numbers found. PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
+            )
 
         return "\n".join(status)
     except Exception as e:
@@ -1729,7 +1915,8 @@ def _shape_attachment(row: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "id": row["attachment_id"],
         "message_id": row["message_id"],
-        "filename": row.get("transfer_name") or (os.path.basename(path) if path else None),
+        "filename": row.get("transfer_name")
+        or (os.path.basename(path) if path else None),
         "path": path,
         "mime_type": row.get("mime_type"),
         "uti": row.get("uti"),
@@ -1923,10 +2110,16 @@ def search_attachments(
     for row in rows:
         shaped = _shape_attachment(row)
         try:
-            date_str = _from_apple_ns(int(row["message_date"])).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+            date_str = (
+                _from_apple_ns(int(row["message_date"]))
+                .astimezone()
+                .strftime("%Y-%m-%d %H:%M:%S")
+            )
         except (ValueError, TypeError, OverflowError):
             date_str = "Unknown date"
-        sender = "You" if row.get("is_from_me") else get_contact_name(row.get("handle_id"))
+        sender = (
+            "You" if row.get("is_from_me") else get_contact_name(row.get("handle_id"))
+        )
         size_kb = (shaped["size_bytes"] or 0) / 1024
         marker = "" if shaped["exists"] else " [missing on disk]"
         lines.append(
