@@ -101,16 +101,16 @@ Install the generated `.mcpb` file from Claude Desktop **Settings** > **Extensio
 
 Claude Desktop, or the terminal used to package/run the extension, still needs Full Disk Access to read Messages.
 
-**Bundling `uv` (self-contained `.mcpb`)**
+**Building the extension**
 
-By default the packaged extension calls the system `uv`. To produce a `.mcpb` that also runs on machines without `uv` installed, use the build script, which vendors the `uv` binary into the bundle (`bin/uv`) and packs it:
+Build the `.mcpb` with the build script:
 
 ```bash
 python scripts/build_mcpb.py                  # build for the host architecture
 python scripts/build_mcpb.py --arch x86_64    # build for Intel macs
 ```
 
-The `uv` binary is architecture specific, so build one `.mcpb` per architecture you support. On first launch the bundled `uv` still downloads Python and dependencies, so network access is required once. Pass `--no-bundle` to pack against the system `uv` instead; see `python scripts/build_mcpb.py --help` for all options.
+By default it vendors a `uv` binary into the bundle (`bin/uv`) so the extension also runs on machines without `uv` installed — that binary is architecture specific (build one `.mcpb` per arch) and downloads Python and dependencies on first launch (network required once). Pass `--no-bundle` to pack against the system `uv` instead; see `python scripts/build_mcpb.py --help` for all options.
 
 #### Option 2: Manual Config
 
