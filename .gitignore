@@ -61,4 +61,8 @@ venv.bak/
 *.swo
 
 # macOS
-.DS_Store 
+.DS_Store
+
+# MCPB build artifacts (vendored uv binary + packed extension)
+bin/
+*.mcpb 
