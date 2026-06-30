@@ -15,6 +15,8 @@ Configured in `~/.cursor/mcp.json`:
 }
 ```
 
+GitHub: https://github.com/jrrmarketing/mac-messages-mcp-jrr
+
 Restart Cursor (or reload MCP) after pulling changes.
 
 Agent rules: `~/.cursor/rules/messages-mcp.mdc`
