@@ -17,6 +17,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from mcp.server.fastmcp import Image
 from thefuzz import fuzz
 
+from mac_messages_mcp.delivery import (
+    choose_delivery_route,
+    finalize_send_result,
+    send_timestamp_ns,
+)
+
 
 def run_applescript(script: str) -> str:
     """Run an AppleScript and return the result."""
@@ -780,6 +786,21 @@ def _send_message_to_recipient(
         Success or error message
     """
     safe_recipient = escape_applescript(recipient)
+    route = choose_delivery_route(recipient, group_chat=group_chat)
+    since_apple_ns = send_timestamp_ns()
+
+    # SMS-only phones: skip iMessage compose entirely.
+    if not group_chat and route == "sms":
+        sms_result = _send_message_sms(recipient, message, contact_name)
+        return finalize_send_result(
+            recipient,
+            message,
+            sms_result,
+            since_apple_ns,
+            route,
+            contact_name,
+        )
+
     file_path = None
     try:
         # Create a unique temporary file with the message content
@@ -793,7 +814,15 @@ def _send_message_to_recipient(
 
         # Adjust the AppleScript command based on whether this is a group chat
         if not group_chat:
-            command = f'tell application "Messages" to send (read (POSIX file "{safe_file_path}") as «class utf8») to participant "{safe_recipient}" of (1st service whose service type = iMessage)'
+            service_target = (
+                "(1st service whose service type = iMessage)"
+                if route != "sms"
+                else "(1st account whose service type = SMS and enabled is true)"
+            )
+            command = (
+                f'tell application "Messages" to send (read (POSIX file "{safe_file_path}") '
+                f'as «class utf8») to participant "{safe_recipient}" of {service_target}'
+            )
         else:
             # Group chats are addressed by their full chat id (e.g. "iMessage;+;chat123…").
             # The Messages dictionary requires `chat id "…"`, NOT `chat "…"`:
@@ -807,14 +836,39 @@ def _send_message_to_recipient(
         # Check result
         if result.startswith("Error:"):
             # Try fallback to direct method
-            return _send_message_direct(recipient, message, contact_name, group_chat)
+            direct_result = _send_message_direct(
+                recipient, message, contact_name, group_chat, force_sms=(route == "sms")
+            )
+            return finalize_send_result(
+                recipient,
+                message,
+                direct_result,
+                since_apple_ns,
+                route,
+                contact_name,
+            )
 
-        # Message sent successfully
         display_name = contact_name if contact_name else recipient
-        return f"Message sent successfully to {display_name}"
-    except Exception as e:
-        # Try fallback method
-        return _send_message_direct(recipient, message, contact_name, group_chat)
+        return finalize_send_result(
+            recipient,
+            message,
+            f"Message sent successfully to {display_name}",
+            since_apple_ns,
+            route,
+            contact_name,
+        )
+    except Exception:
+        direct_result = _send_message_direct(
+            recipient, message, contact_name, group_chat, force_sms=(route == "sms")
+        )
+        return finalize_send_result(
+            recipient,
+            message,
+            direct_result,
+            since_apple_ns,
+            route,
+            contact_name,
+        )
     finally:
         # Clean up the temporary file
         if file_path:
@@ -1462,7 +1516,11 @@ def _send_message_sms(recipient: str, message: str, contact_name: str = None) ->
 
 
 def _send_message_direct(
-    recipient: str, message: str, contact_name: str = None, group_chat: bool = False
+    recipient: str,
+    message: str,
+    contact_name: str = None,
+    group_chat: bool = False,
+    force_sms: bool = False,
 ) -> str:
     """
     Enhanced direct AppleScript method for sending messages with SMS/RCS fallback.
@@ -1522,6 +1580,9 @@ def _send_message_direct(
                 return f"Unknown group message result: {result}"
         except Exception as e:
             return f"Error sending group message: {str(e)}"
+
+    if force_sms:
+        return _send_message_sms(recipient, message, contact_name)
 
     # For individual messages, try iMessage first with automatic SMS fallback
     # Enhanced AppleScript with built-in fallback logic

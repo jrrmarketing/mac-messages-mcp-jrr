@@ -11,8 +11,8 @@ from typing import Annotated
 from mcp.server.fastmcp import Context, FastMCP
 from pydantic import Field
 
+from mac_messages_mcp.delivery import format_delivery_plan, get_delivery_plan
 from mac_messages_mcp.messages import (
-    _check_imessage_availability,
     _format_phone_for_messages,
     check_addressbook_access,
     check_messages_db_access,
@@ -123,12 +123,12 @@ def tool_send_message(
     Send one outgoing message through the macOS Messages app.
 
     This has an external side effect: it sends the provided text to the recipient
-    using Messages. It may use iMessage or SMS/RCS depending on recipient
-    availability and Messages configuration. Requires Automation permission for
-    Messages, and the signed-in Mac must be able to send to the recipient. Returns
-    a plain-text success or error message; it does not delete or modify existing
-    conversations. Use tool_find_contact first when a name is ambiguous, and
-    tool_check_imessage_availability when delivery capability is uncertain.
+    using Messages. Phone numbers without iMessage history are sent SMS-first and
+    verified in chat.db after send. Requires Automation permission for Messages,
+    and the signed-in Mac must be able to send to the recipient. Returns a plain-
+    text result prefixed with verified:, unverified:, or failed:. Use
+    tool_preflight_send before sending when delivery route matters; use
+    tool_find_contact first when a name is ambiguous.
     """
     logger.info(f"Sending message to: {recipient}, group_chat: {group_chat}")
     try:
@@ -325,19 +325,77 @@ def tool_check_imessage_availability(
     logger.info(f"Checking iMessage availability for: {recipient}")
     try:
         recipient = str(recipient)
-        has_imessage = _check_imessage_availability(recipient)
-
-        if has_imessage:
-            return f"✅ {recipient} has iMessage available - messages will be sent via iMessage"
+        plan = get_delivery_plan(recipient, group_chat=False)
+        if plan["route"] == "sms":
+            header = (
+                f"📱 {recipient} does not have iMessage — MCP will use SMS-first routing"
+            )
+        elif plan["imessage_available"]:
+            header = (
+                f"✅ {recipient} has iMessage available — MCP will send via iMessage"
+            )
         else:
-            # Check if it looks like a phone number for SMS fallback
-            if any(c.isdigit() for c in recipient):
-                return f"📱 {recipient} does not have iMessage - messages will automatically fall back to SMS/RCS"
-            else:
-                return f"❌ {recipient} does not have iMessage and SMS is not available for email addresses"
+            header = (
+                f"❌ {recipient} does not have iMessage and SMS is not available "
+                f"for email addresses"
+            )
+        return header + "\n\n" + format_delivery_plan(plan)
     except Exception as e:
         logger.error(f"Error checking iMessage availability: {str(e)}")
         return f"Error checking iMessage availability: {str(e)}"
+
+
+@mcp.tool()
+def tool_preflight_send(
+    ctx: Context,
+    recipient: Annotated[
+        str,
+        Field(
+            description="Phone number, email, contact name, or contact:N before sending."
+        ),
+    ],
+) -> str:
+    """
+    Plan the delivery route before sending through Messages.
+
+    Read-only preflight: checks iMessage history, SMS history, failed iMessage
+    attempts, and returns route, confidence, and whether MCP send or manual SMS
+    is recommended. Use this (or tool_check_imessage_availability) before
+    tool_send_message when delivery must land on the right service.
+    """
+    logger.info(f"Preflight send plan for: {recipient}")
+    try:
+        recipient = str(recipient).strip()
+        if recipient.lower().startswith("contact:"):
+            return (
+                "Resolve the contact first with tool_find_contact, then run "
+                "tool_preflight_send on the phone number."
+            )
+        plan = get_delivery_plan(recipient, group_chat=False)
+        lines = [
+            format_delivery_plan(plan),
+            "",
+            "Agent guidance:",
+        ]
+        if plan["recommendation"] == "mcp_send_sms":
+            lines.append(
+                "- SMS-only: tool_send_message will skip iMessage and verify in chat.db."
+            )
+            lines.append(
+                "- If result starts with failed: or unverified:, have Josiah resend "
+                "manually as Text Message (green bubble)."
+            )
+        elif plan["recommendation"] == "mcp_send":
+            lines.append("- iMessage route OK for MCP send.")
+            lines.append(
+                "- Only log CRM sms/email as sent when result starts with verified:."
+            )
+        else:
+            lines.append("- No reliable SMS/iMessage route — use email or manual send.")
+        return "\n".join(lines)
+    except Exception as e:
+        logger.error(f"Error in tool_preflight_send: {str(e)}")
+        return f"Error planning send: {str(e)}"
 
 
 @mcp.tool()
