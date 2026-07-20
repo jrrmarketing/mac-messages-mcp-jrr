@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 from mac_messages_mcp.messages import (
     _find_chat_by_identifier,
     _format_phone_for_messages,
+    _get_phone_formats,
     _sanitize_message_body,
     _send_message_to_recipient,
     escape_applescript,
@@ -618,3 +619,32 @@ class TestEscapeAppleScript(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPhoneFormatsInternational(unittest.TestCase):
+    """chat.db stores handles as E.164, so the plus form must always be tried."""
+
+    def test_au_number_includes_plus_form(self):
+        formats = _get_phone_formats("61451323547")
+        self.assertIn("+61451323547", formats)
+
+    def test_uk_number_includes_plus_form(self):
+        formats = _get_phone_formats("447888888779")
+        self.assertIn("+447888888779", formats)
+
+    def test_us_eleven_digit_still_tries_both_country_code_forms(self):
+        formats = _get_phone_formats("14155551234")
+        self.assertIn("14155551234", formats)
+        self.assertIn("+14155551234", formats)
+        self.assertIn("4155551234", formats)
+
+    def test_us_ten_digit_still_tries_country_code(self):
+        formats = _get_phone_formats("4155551234")
+        self.assertIn("4155551234", formats)
+        self.assertIn("14155551234", formats)
+        self.assertIn("+14155551234", formats)
+
+    def test_no_duplicate_formats(self):
+        for number in ("61451323547", "14155551234", "4155551234"):
+            formats = _get_phone_formats(number)
+            self.assertEqual(len(formats), len(set(formats)), number)

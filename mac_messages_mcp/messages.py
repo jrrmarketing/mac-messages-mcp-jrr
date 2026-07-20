@@ -1718,18 +1718,30 @@ def _get_phone_formats(recipient: str) -> List[str]:
     # Start with the normalized input
     formats_to_try = [recipient]
 
-    # For US recipients, try with and without country code
-    if recipient.startswith("1") and len(recipient) > 10:
-        # Try without the country code
-        formats_to_try.append(recipient[1:])
+    # chat.db stores handles in E.164 with a leading plus (+61451323547), while
+    # the normalized input is digits only. Always try the plus form, otherwise
+    # every non-US number misses: lookups, delivery stats, and post-send
+    # verification all silently return nothing for AU/UK/EU numbers.
+    if not recipient.startswith("+"):
         formats_to_try.append("+" + recipient)
 
+    # US recipients additionally appear with and without the 1 country code.
+    if recipient.startswith("1") and len(recipient) > 10:
+        formats_to_try.append(recipient[1:])
+
     elif len(recipient) == 10:
-        # Try with the country code
         formats_to_try.append("1" + recipient)
         formats_to_try.append("+1" + recipient)
 
-    return formats_to_try
+    # Preserve order while dropping duplicates.
+    seen = set()
+    unique_formats = []
+    for candidate in formats_to_try:
+        if candidate not in seen:
+            seen.add(candidate)
+            unique_formats.append(candidate)
+
+    return unique_formats
 
 
 def find_handle_by_phone(phone: str) -> Optional[int]:
