@@ -16,6 +16,36 @@ from typing import Any, Dict, List, Optional
 SMS_SERVICES = {"SMS", "RCS"}
 IMESSAGE_SERVICES = {"iMessage", "iMessageLite"}
 
+# Markers that mean "we could not read chat.db", as opposed to "we read it and
+# found nothing". Sending uses Automation permission and keeps working without
+# Full Disk Access, so conflating the two makes a successful send look failed.
+_DB_ACCESS_MARKERS = (
+    "cannot access messages database",
+    "full disk access",
+    "messages database not found",
+    "unable to open database",
+    "permission denied",
+)
+
+
+def db_access_error(rows: Optional[List[Dict[str, Any]]]) -> Optional[str]:
+    """Return the error text when a query result signals no database access."""
+    if not rows:
+        return None
+
+    error = rows[0].get("error") if isinstance(rows[0], dict) else None
+    if not isinstance(error, str):
+        return None
+
+    lowered = error.lower()
+    if any(marker in lowered for marker in _DB_ACCESS_MARKERS):
+        return error
+    return None
+
+
+class MessagesDatabaseUnreadable(RuntimeError):
+    """Raised when chat.db cannot be read, so routing/verification is unknowable."""
+
 
 def _messages():
     from mac_messages_mcp import messages as messages_module
@@ -60,6 +90,8 @@ def _handle_delivery_stats(recipient: str) -> List[Dict[str, Any]]:
         GROUP BY h.service
     """
     rows = messages.query_messages_db(query, params)
+    if db_access_error(rows):
+        raise MessagesDatabaseUnreadable(db_access_error(rows) or "")
     if not rows or "error" in rows[0]:
         return []
     return rows
@@ -91,7 +123,32 @@ def get_delivery_plan(recipient: str, group_chat: bool = False) -> Dict[str, Any
     """Build a structured delivery plan for agents and preflight tooling."""
     recipient = str(recipient).strip()
     route = choose_delivery_route(recipient, group_chat=group_chat)
-    stats = _handle_delivery_stats(recipient)
+
+    try:
+        stats = _handle_delivery_stats(recipient)
+    except MessagesDatabaseUnreadable as exc:
+        # Routing is inferred from chat.db history. Without read access there is
+        # no history to infer from, so report unknown rather than guessing SMS.
+        return {
+            "recipient": recipient,
+            "route": route,
+            "db_readable": False,
+            "db_error": str(exc),
+            "imessage_available": None,
+            "sms_history": None,
+            "imessage_history": None,
+            "failed_imessage_history": None,
+            "recommendation": "mcp_send",
+            "confidence": "unknown",
+            "summary": (
+                "Cannot read the Messages database, so the delivery route is unknown. "
+                "Sending still works (that uses Automation permission, not Full Disk "
+                "Access), but the route below is a guess and delivery cannot be "
+                "confirmed afterwards. Grant Full Disk Access to the host app to "
+                "restore routing and verification."
+            ),
+            "stats": [],
+        }
 
     imessage_ok = _messages()._check_imessage_availability(recipient)
     sms_history = any(
@@ -108,6 +165,8 @@ def get_delivery_plan(recipient: str, group_chat: bool = False) -> Dict[str, Any
         row.get("service") in IMESSAGE_SERVICES and (row.get("errors") or 0) > 0
         for row in stats
     )
+
+    db_readable = True
 
     if group_chat:
         recommendation = "mcp_send"
@@ -133,6 +192,7 @@ def get_delivery_plan(recipient: str, group_chat: bool = False) -> Dict[str, Any
     return {
         "recipient": recipient,
         "route": route,
+        "db_readable": db_readable,
         "imessage_available": imessage_ok,
         "sms_history": sms_history,
         "imessage_history": imessage_history,
@@ -146,10 +206,17 @@ def get_delivery_plan(recipient: str, group_chat: bool = False) -> Dict[str, Any
 
 def format_delivery_plan(plan: Dict[str, Any]) -> str:
     """Plain-text plan for MCP tools."""
+    if plan.get("db_readable") is False:
+        imessage_state = "unknown (no database access)"
+        route_line = f"Route: {plan['route']} (unverified guess)"
+    else:
+        imessage_state = "yes" if plan["imessage_available"] else "no"
+        route_line = f"Route: {plan['route']}"
+
     lines = [
         f"Recipient: {plan['recipient']}",
-        f"Route: {plan['route']}",
-        f"iMessage available: {'yes' if plan['imessage_available'] else 'no'}",
+        route_line,
+        f"iMessage available: {imessage_state}",
         f"Recommendation: {plan['recommendation']} ({plan['confidence']} confidence)",
         plan["summary"],
     ]
@@ -216,6 +283,14 @@ def verify_outbound_delivery(
         if attempt:
             time.sleep(delay_seconds)
         rows = messages.query_messages_db(query, params + (since_apple_ns,))
+        access_error = db_access_error(rows)
+        if access_error:
+            # Retrying cannot help: the database is unreadable, not slow.
+            return {
+                "verified": False,
+                "reason": "no_db_access",
+                "error": access_error,
+            }
         if not rows:
             continue
         if isinstance(rows[0].get("error"), str):
@@ -309,6 +384,14 @@ def finalize_send_result(
         )
 
     reason = verification.get("reason", "not_in_db")
+    if reason == "no_db_access":
+        return (
+            f"unverified:no_db_access Message was sent to {display_name} and "
+            f"AppleScript accepted it. Delivery could NOT be checked because the "
+            f"Messages database is unreadable, which needs Full Disk Access for the "
+            f"host app. This is a missing permission, not a failed send. Do not "
+            f"resend on the strength of this result; open Messages to confirm."
+        )
     if reason == "wrong_service":
         service = verification.get("service", "iMessage")
         return (
