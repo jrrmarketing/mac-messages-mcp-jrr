@@ -165,10 +165,14 @@ class TestSendMessageToRecipient(unittest.TestCase):
         mock_applescript.return_value = "Success"
 
         # Run function — this raised NameError before the fix
-        result = _send_message_to_recipient("+15551234567", "hello")
+        with patch("mac_messages_mcp.messages.choose_delivery_route", return_value="imessage"), patch(
+            "mac_messages_mcp.messages.finalize_send_result", return_value="verified:iMessage"
+        ) as verify:
+            result = _send_message_to_recipient("+15551234567", "hello")
 
         # Check results
-        self.assertIn("sent successfully", result)
+        self.assertEqual("verified:iMessage", result)
+        verify.assert_called_once()
 
     @patch("mac_messages_mcp.messages.run_applescript")
     def test_recipient_with_quotes_is_escaped(self, mock_applescript):
@@ -246,7 +250,10 @@ class TestTempFileRace(unittest.TestCase):
         mock_applescript.return_value = ""
 
         # Run function
-        _send_message_to_recipient("+15551234567", "test message")
+        with patch("mac_messages_mcp.messages.choose_delivery_route", return_value="imessage"), patch(
+            "mac_messages_mcp.messages.finalize_send_result", return_value="verified:iMessage"
+        ):
+            _send_message_to_recipient("+15551234567", "test message")
 
         # Check results - the AppleScript should reference a temp file path
         script = mock_applescript.call_args[0][0]

@@ -1063,7 +1063,7 @@ def get_recent_messages(
 
         # Check if contact might be a name rather than a phone number or email
         # If any character is NOT a phone/email character, treat as a name
-        if not all(c.isdigit() or c in "+- ()@." for c in contact):
+        if "@" not in contact and not all(c.isdigit() or c in "+- ()." for c in contact):
             # Try fuzzy matching
             matches = find_contact_by_name(contact)
 
@@ -1092,7 +1092,11 @@ def get_recent_messages(
             # This is an email
             query = "SELECT ROWID FROM handle WHERE id = ?"
             results = query_messages_db(query, (contact,))
-            if results and not "error" in results[0] and len(results) > 0:
+            if results and "error" in results[0]:
+                return "Error: Could not read Messages history."
+            if not results:
+                return f"No message history found with '{contact}'."
+            if results:
                 handle_ids = [row["ROWID"] for row in results]
         else:
             # This is a phone number - try various formats (returns all handles for multi-protocol)
