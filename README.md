@@ -30,8 +30,8 @@ See the [Integration section](#integration) below for setup instructions.
 
 ## Features
 
-- **Universal Message Sending**: Automatically sends via iMessage or SMS/RCS based on recipient availability
-- **Smart Fallback**: Seamless fallback to SMS when iMessage is unavailable (perfect for Android users)
+- **Universal Message Sending**: Sends direct numbers through iMessage first and guards carrier fallback
+- **Guarded Fallback**: Direct numbers try iMessage first. SMS is held for native line verification because macOS scripting cannot choose an iPhone SIM.
 - **Message Reading**: Read recent messages from the macOS Messages app
 - **Complete Structured History**: Page exact phone or email history under one verified snapshot for safe downstream context checks
 - **Contact Filtering**: Filter messages by specific contacts or phone numbers
@@ -228,18 +228,19 @@ uv install -e .
 
 ### Smart Message Delivery
 
-Mac Messages MCP automatically handles message delivery across different platforms:
+Mac Messages MCP prefers iMessage for every direct phone number:
 
 - **iMessage Users** (iPhone, iPad, Mac): Messages sent via iMessage
-- **Android Users**: Messages automatically fall back to SMS/RCS
+- **SMS-only Users**: The connector stops before carrier SMS. Open native Messages, verify the conversation is using the required mobile line, then send once.
 - **Mixed Groups**: Optimal delivery method chosen per recipient
 
 ```python
 # Send to iPhone user - uses iMessage
 send_message("+1234567890", "Hey! This goes via iMessage")
 
-# Send to Android user - automatically uses SMS
-send_message("+1987654321", "Hey! This goes via SMS") 
+# A non-iMessage number returns a guarded fallback result instead of choosing
+# the first available SMS account.
+send_message("+1987654321", "Hey! This tries iMessage first")
 
 # Check delivery method before sending
 check_imessage_availability("+1234567890")  # Returns availability status

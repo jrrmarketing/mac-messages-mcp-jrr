@@ -2,7 +2,9 @@
 Delivery routing and post-send verification for macOS Messages.
 
 JRR fork improvements:
-- SMS-first when iMessage is not available for phone numbers
+- iMessage-first for every direct phone number
+- SMS fallback is held until the native conversation is verified on the
+  owner's required mobile line
 - Post-send chat.db verification so "success" means the message actually landed
 - Preflight recommendations for agents
 """
@@ -57,7 +59,9 @@ def _recipient_handle_ids(recipient: str) -> List[int]:
     messages = _messages()
 
     if "@" in recipient:
-        rows = messages.query_messages_db("SELECT ROWID FROM handle WHERE id = ?", (recipient,))
+        rows = messages.query_messages_db(
+            "SELECT ROWID FROM handle WHERE id = ?", (recipient,)
+        )
         if rows and "error" not in rows[0]:
             return [row["ROWID"] for row in rows]
         return []
@@ -110,11 +114,12 @@ def choose_delivery_route(recipient: str, group_chat: bool = False) -> str:
     if messages._looks_like_phone_input(recipient) or any(
         ch.isdigit() for ch in recipient
     ):
-        return (
-            "imessage"
-            if messages._check_imessage_availability(recipient)
-            else "sms"
-        )
+        # Do not turn a missing iMessage history row into permission to send
+        # carrier SMS. A phone number always gets an iMessage attempt first.
+        # The macOS Messages scripting dictionary exposes one aggregate SMS
+        # account and cannot select or verify an iPhone SIM line, so automated
+        # SMS fallback is deliberately held elsewhere in the send path.
+        return "imessage"
 
     return "imessage"
 
@@ -138,14 +143,14 @@ def get_delivery_plan(recipient: str, group_chat: bool = False) -> Dict[str, Any
             "sms_history": None,
             "imessage_history": None,
             "failed_imessage_history": None,
-            "recommendation": "mcp_send",
+            "recommendation": "mcp_send_imessage_only_then_manual_sms",
             "confidence": "unknown",
             "summary": (
-                "Cannot read the Messages database, so the delivery route is unknown. "
-                "Sending still works (that uses Automation permission, not Full Disk "
-                "Access), but the route below is a guess and delivery cannot be "
-                "confirmed afterwards. Grant Full Disk Access to the host app to "
-                "restore routing and verification."
+                "Cannot read the Messages database, so iMessage availability and "
+                "delivery verification are unknown. Direct numbers still attempt "
+                "iMessage first. Carrier SMS remains held until native Messages "
+                "visibly shows the Isle of Man line. Grant Full Disk Access to the "
+                "host app to restore history and verification."
             ),
             "stats": [],
         }
@@ -176,18 +181,20 @@ def get_delivery_plan(recipient: str, group_chat: bool = False) -> Dict[str, Any
         recommendation = "mcp_send" if imessage_ok else "manual_or_email"
         confidence = "medium" if imessage_ok else "low"
         summary = "Email handle — iMessage when available."
-    elif route == "sms":
-        recommendation = "mcp_send_sms"
-        confidence = "high" if sms_history or not stats else "medium"
+    elif not imessage_ok:
+        recommendation = "mcp_send_imessage_only_then_manual_sms"
+        confidence = "high" if sms_history or failed_imessage else "medium"
         summary = (
-            "SMS-only phone — MCP will skip iMessage and verify in chat.db after send."
+            "Phone number — MCP will attempt iMessage first. If iMessage is unavailable, "
+            "automated SMS is held because macOS cannot select or verify the iPhone SIM. "
+            "Use native Messages only after the conversation shows the Isle of Man line."
         )
-        if failed_imessage:
-            summary += " Prior iMessage attempts to this number failed."
     else:
         recommendation = "mcp_send"
         confidence = "high" if imessage_history else "medium"
-        summary = "iMessage available — MCP will send via iMessage and verify after send."
+        summary = (
+            "iMessage available — MCP will send via iMessage and verify after send."
+        )
 
     return {
         "recipient": recipient,
@@ -208,7 +215,7 @@ def format_delivery_plan(plan: Dict[str, Any]) -> str:
     """Plain-text plan for MCP tools."""
     if plan.get("db_readable") is False:
         imessage_state = "unknown (no database access)"
-        route_line = f"Route: {plan['route']} (unverified guess)"
+        route_line = f"Route: {plan['route']} first (availability unverified)"
     else:
         imessage_state = "yes" if plan["imessage_available"] else "no"
         route_line = f"Route: {plan['route']}"
@@ -262,6 +269,7 @@ def verify_outbound_delivery(
     snippet = (message or "").strip()
     snippet = snippet[:120] if snippet else ""
     expected_sms = expected_route == "sms"
+    expected_imessage = expected_route in {"imessage", "email_imessage"}
 
     query = f"""
         SELECT
@@ -330,6 +338,13 @@ def verify_outbound_delivery(
                     "service": service,
                 }
 
+            if expected_imessage and is_sms:
+                return {
+                    "verified": False,
+                    "reason": "wrong_service",
+                    "service": service,
+                }
+
             return {
                 "verified": True,
                 "service": service,
@@ -366,7 +381,11 @@ def finalize_send_result(
     """Combine AppleScript result with chat.db verification."""
     display_name = contact_name or recipient
 
-    if send_result.startswith("Error") or "error:" in send_result.lower():
+    if (
+        send_result.startswith("Error")
+        or "error:" in send_result.lower()
+        or send_result.startswith("blocked:")
+    ):
         return send_result
 
     verification = verify_outbound_delivery(
@@ -393,11 +412,13 @@ def finalize_send_result(
             f"resend on the strength of this result; open Messages to confirm."
         )
     if reason == "wrong_service":
-        service = verification.get("service", "iMessage")
+        service = verification.get("service", "unknown")
+        expected = "SMS" if route == "sms" else "iMessage"
         return (
             f"failed:wrong_route AppleScript accepted the send but chat.db shows "
-            f"{service} instead of SMS for {display_name}. Open Messages and resend "
-            f"manually as Text Message (green bubble)."
+            f"{service} instead of {expected} for {display_name}. Do not resend "
+            f"automatically. For SMS fallback, open native Messages, verify the "
+            f"conversation is using the Isle of Man line, then send once."
         )
     if reason == "delivery_error":
         return (

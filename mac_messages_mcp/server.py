@@ -47,7 +47,9 @@ def tool_get_message_history_page(
     ctx: Context,
     contact: Annotated[
         str,
-        Field(description="Exact phone number or email address. Names and fuzzy contact selectors are rejected."),
+        Field(
+            description="Exact phone number or email address. Names and fuzzy contact selectors are rejected."
+        ),
     ],
     hours: Annotated[
         int,
@@ -59,11 +61,15 @@ def tool_get_message_history_page(
     ] = 100,
     cursor: Annotated[
         str | None,
-        Field(description="Opaque next_cursor from the preceding page, passed back unchanged."),
+        Field(
+            description="Opaque next_cursor from the preceding page, passed back unchanged."
+        ),
     ] = None,
     snapshot: Annotated[
         str | None,
-        Field(description="Snapshot from the first page, required with every continuation."),
+        Field(
+            description="Snapshot from the first page, required with every continuation."
+        ),
     ] = None,
 ) -> dict:
     """Read one structured exact-identity Messages page without sending or editing."""
@@ -158,8 +164,9 @@ def tool_send_message(
     Send one outgoing message through the macOS Messages app.
 
     This has an external side effect: it sends the provided text to the recipient
-    using Messages. Phone numbers without iMessage history are sent SMS-first and
-    verified in chat.db after send. Requires Automation permission for Messages,
+    using Messages. Direct phone numbers always attempt iMessage first. Automated
+    SMS fallback is held because macOS cannot select or verify the iPhone SIM;
+    native fallback must visibly use the Isle of Man line. Requires Automation permission for Messages,
     and the signed-in Mac must be able to send to the recipient. Returns a plain-
     text result prefixed with verified:, unverified:, or failed:. Use
     tool_preflight_send before sending when delivery route matters; use
@@ -361,13 +368,14 @@ def tool_check_imessage_availability(
     try:
         recipient = str(recipient)
         plan = get_delivery_plan(recipient, group_chat=False)
-        if plan["route"] == "sms":
-            header = (
-                f"📱 {recipient} does not have iMessage — MCP will use SMS-first routing"
-            )
-        elif plan["imessage_available"]:
+        if plan["imessage_available"]:
             header = (
                 f"✅ {recipient} has iMessage available — MCP will send via iMessage"
+            )
+        elif plan["route"] == "imessage":
+            header = (
+                f"📱 {recipient} has no verified iMessage history — MCP will still try "
+                f"iMessage first; SMS requires native Isle of Man line verification"
             )
         else:
             header = (
@@ -393,9 +401,9 @@ def tool_preflight_send(
     """
     Plan the delivery route before sending through Messages.
 
-    Read-only preflight: checks iMessage history, SMS history, failed iMessage
-    attempts, and returns route, confidence, and whether MCP send or manual SMS
-    is recommended. Use this (or tool_check_imessage_availability) before
+    Read-only preflight: checks iMessage history, SMS history and failed iMessage
+    attempts. Phone numbers always route to iMessage first; SMS fallback is held
+    until native Messages visibly shows the Isle of Man line. Use this (or tool_check_imessage_availability) before
     tool_send_message when delivery must land on the right service.
     """
     logger.info(f"Preflight send plan for: {recipient}")
