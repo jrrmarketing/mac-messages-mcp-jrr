@@ -42,6 +42,10 @@
       "description": "Read-only recent Messages lookup with optional contact or group chat ID filtering. Requires Full Disk Access and returns a plain-text message summary."
     },
     {
+      "name": "tool_get_message_history_page",
+      "description": "Read-only exact phone or email history with structured snapshot-bound pagination, explicit completeness, and matched-handle provenance."
+    },
+    {
       "name": "tool_send_message",
       "description": "Sends one outgoing iMessage or SMS/RCS through Messages using E.164 phone numbers or emails. Requires Messages automation permission and returns a plain-text success or error."
     },

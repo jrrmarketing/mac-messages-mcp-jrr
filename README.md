@@ -33,6 +33,7 @@ See the [Integration section](#integration) below for setup instructions.
 - **Universal Message Sending**: Automatically sends via iMessage or SMS/RCS based on recipient availability
 - **Smart Fallback**: Seamless fallback to SMS when iMessage is unavailable (perfect for Android users)
 - **Message Reading**: Read recent messages from the macOS Messages app
+- **Complete Structured History**: Page exact phone or email history under one verified snapshot for safe downstream context checks
 - **Contact Filtering**: Filter messages by specific contacts or phone numbers
 - **Group Chat Filtering**: Use chat IDs from `tool_get_chats` to read one group conversation chronologically
 - **Fuzzy Search**: Search through message content with intelligent matching
@@ -49,6 +50,8 @@ Attachment access uses **progressive disclosure** — discovery is cheap, fetchi
 3. **Tier 3 — fetch.** `tool_get_attachment(attachment_id)` returns the file. Image MIME types come back inline (HEIC is converted to PNG so it can be viewed directly). PDFs, video, and audio come back as a filesystem path the agent can read with its own tools. Inline image bytes are capped at 5MB by default to avoid context blowup; oversized images fall back to path return.
 
 Stickers, link-preview "balloon" payloads, and `.pluginPayloadAttachment` containers are filtered out by default.
+
+For automation that must prove complete coverage, use `tool_get_message_history_page` with an exact phone number or email. Pass each returned `next_cursor` and `snapshot` back unchanged until `coverage_complete` is true. Repeated, malformed, stale, or source-changed continuations fail instead of being treated as empty history.
 
 ### Recipient formats
 
