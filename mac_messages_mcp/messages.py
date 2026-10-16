@@ -1067,7 +1067,9 @@ def get_recent_messages(
 
         # Check if contact might be a name rather than a phone number or email
         # If any character is NOT a phone/email character, treat as a name
-        if "@" not in contact and not all(c.isdigit() or c in "+- ()." for c in contact):
+        if "@" not in contact and not all(
+            c.isdigit() or c in "+- ()." for c in contact
+        ):
             # Try fuzzy matching
             matches = find_contact_by_name(contact)
 
@@ -1420,7 +1422,9 @@ def get_message_history_page(
         )
     if handle_rows and "error" in handle_rows[0]:
         raise ValueError("MESSAGES_DATABASE_UNAVAILABLE")
-    handle_rows = [row for row in handle_rows if row.get("ROWID") is not None and row.get("id")]
+    handle_rows = [
+        row for row in handle_rows if row.get("ROWID") is not None and row.get("id")
+    ]
     resolved_handles = [str(row["id"]) for row in handle_rows]
     if not handle_rows:
         return paginate_message_rows(
@@ -1704,9 +1708,11 @@ def _check_imessage_availability(recipient: str) -> bool:
     return False
 
 
-def _send_message_sms(recipient: str, message: str, contact_name: str = None) -> str:
+def _send_message_sms(
+    recipient: str, message: str, contact_name: Optional[str] = None
+) -> str:
     """
-    Send message via SMS/RCS using AppleScript.
+    Hold automated SMS/RCS until the native conversation line is verified.
 
     Args:
         recipient: Phone number to send to
@@ -1714,8 +1720,32 @@ def _send_message_sms(recipient: str, message: str, contact_name: str = None) ->
         contact_name: Optional contact name for display
 
     Returns:
-        Success or error message
+        A blocked result explaining the required native verification
     """
+    # Messages' AppleScript API exposes one aggregate SMS account. It does not
+    # expose the iPhone SIM/line selector, so choosing the first enabled SMS
+    # account can send from the wrong mobile line. Hold automated fallback and
+    # require the native conversation to be visibly set to the Isle of Man line.
+    return (
+        "blocked:sms_line_verification_required iMessage was unavailable, but "
+        "macOS automation cannot select or verify the iPhone SIM. Open native "
+        "Messages, confirm this conversation uses the Isle of Man line, and only "
+        "then send the SMS once."
+    )
+
+
+def _send_message_sms_after_line_verification(
+    recipient: str,
+    message: str,
+    contact_name: Optional[str] = None,
+    verified_line_label: str = "",
+) -> str:
+    """Internal SMS primitive for a future native line-verification adapter."""
+    if verified_line_label.strip() != "Isle of Man":
+        return (
+            "blocked:sms_line_verification_required The native conversation must "
+            "be visibly set to the Isle of Man line before carrier SMS."
+        )
     safe_message = escape_applescript(message)
     safe_recipient = escape_applescript(recipient)
 
@@ -1841,26 +1871,9 @@ def _send_message_direct(
                 -- Return success with service type
                 return "success:iMessage"
             on error iMessageErr
-                -- iMessage failed, try SMS fallback if recipient looks like a phone number
-                try
-                    -- Check if recipient looks like a phone number (contains digits)
-                    if "{safe_recipient}" contains "0" or "{safe_recipient}" contains "1" or "{safe_recipient}" contains "2" or "{safe_recipient}" contains "3" or "{safe_recipient}" contains "4" or "{safe_recipient}" contains "5" or "{safe_recipient}" contains "6" or "{safe_recipient}" contains "7" or "{safe_recipient}" contains "8" or "{safe_recipient}" contains "9" then
-                        -- Try SMS service
-                        set smsService to first account whose service type = SMS and enabled is true
-                        send "{safe_message}" to participant "{safe_recipient}" of smsService
-                        
-                        -- Wait briefly to check for immediate errors
-                        delay 2
-                        
-                        return "success:SMS"
-                    else
-                        -- Not a phone number, can't use SMS
-                        return "error:iMessage failed and SMS not available for email addresses - " & iMessageErr
-                    end if
-                on error smsErr
-                    -- Both iMessage and SMS failed
-                    return "error:Both iMessage and SMS failed - iMessage: " & iMessageErr & " SMS: " & smsErr
-                end try
+                -- Never select the first SMS account here. The scripting API
+                -- cannot prove which iPhone SIM it will use.
+                return "blocked:sms_line_verification_required " & iMessageErr
             end try
         on error generalErr
             return "error:" & generalErr
@@ -1872,12 +1885,12 @@ def _send_message_direct(
         result = run_applescript(script)
         display_name = contact_name if contact_name else recipient
 
-        if result.startswith("error:"):
+        if result.startswith("blocked:sms_line_verification_required"):
+            return _send_message_sms(recipient, message, contact_name)
+        elif result.startswith("error:"):
             return f"Error sending message: {result[6:]}"
         elif result.strip() == "success:iMessage":
             return f"Message sent successfully via iMessage to {display_name}"
-        elif result.strip() == "success:SMS":
-            return f"Message sent successfully via SMS to {display_name} (iMessage not available)"
         elif result.strip() == "success":
             return f"Message sent successfully to {display_name}"
         else:

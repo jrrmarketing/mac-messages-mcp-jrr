@@ -5,6 +5,7 @@ Tests all MCP tools to ensure they don't crash and handle edge cases properly
 
 import os
 import sys
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -144,9 +145,12 @@ def test_time_ranges():
     print("✅ All time ranges work without crashing")
 
 
-def test_sms_fallback_functionality():
-    """Test SMS/RCS fallback functions don't crash with import errors"""
+@patch("mac_messages_mcp.messages.run_applescript")
+@patch("mac_messages_mcp.messages.query_messages_db", return_value=[])
+def test_sms_fallback_functionality(_mock_query, mock_applescript):
+    """Exercise the fallback contract without sending a real message."""
     print("Testing SMS/RCS fallback functionality...")
+    mock_applescript.return_value = "success"
 
     # Test iMessage availability check
     try:
@@ -164,19 +168,11 @@ def test_sms_fallback_functionality():
             f"✅ iMessage availability check handles exceptions properly: {type(e).__name__}"
         )
 
-    # Test SMS sending function
-    try:
-        result = _send_message_sms("+15551234567", "test message")
-        assert isinstance(result, str), "SMS send should return string result"
-        print("✅ SMS sending function works")
-    except Exception as e:
-        # AppleScript errors are expected in test environment, but not import errors
-        if "NameError" in str(e) or "ImportError" in str(e):
-            print(f"❌ Import error in SMS send: {e}")
-            raise AssertionError("Import error in SMS send") from e
-        print(
-            f"✅ SMS sending function handles exceptions properly: {type(e).__name__}"
-        )
+    result = _send_message_sms("+15551234567", "test message")
+    assert result.startswith("blocked:sms_line_verification_required")
+    assert "Isle of Man" in result
+    mock_applescript.assert_not_called()
+    print("✅ SMS fallback is held until the Isle of Man line is verified")
 
 
 def test_applescript_escape_order():
