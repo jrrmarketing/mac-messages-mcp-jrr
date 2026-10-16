@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.3+jrr.3] - 2026-10-16
+
+### Added
+- Structured history now binds each attachment to its parent message and reports content state, size, and content hash under the same stable snapshot.
+- Bounded UTF-8 text attachments are returned as readable content. Image, audio, PDF, video, missing, oversized, unreadable, and MIME-mismatched files remain explicit incomplete evidence for downstream review.
+
+### Fixed
+- Attachment database failures, lookup limits, mid-read file replacement, conflicting duplicate IDs, and later-page attachments now fail closed instead of being mistaken for complete plain-text history.
+
 ## [0.9.3+jrr.2] - 2026-10-16
 
 ### Added

@@ -117,7 +117,11 @@ def test_exact_email_history_returns_structured_rows_without_fuzzy_contact_resol
     with (
         patch(
             "mac_messages_mcp.messages.query_messages_db",
-            side_effect=[[{"ROWID": 7, "id": "buyer@example.test"}], source_rows],
+            side_effect=[
+                [{"ROWID": 7, "id": "buyer@example.test"}],
+                source_rows,
+                [],
+            ],
         ) as query,
         patch("mac_messages_mcp.messages.find_contact_by_name") as names,
     ):
@@ -128,7 +132,7 @@ def test_exact_email_history_returns_structured_rows_without_fuzzy_contact_resol
         )
 
     names.assert_not_called()
-    assert query.call_count == 2
+    assert query.call_count == 3
     assert result["resolved_handles"] == ["buyer@example.test"]
     assert result["coverage_complete"] is True
     assert result["messages"][0]["text"] == "Please do not contact me again"
