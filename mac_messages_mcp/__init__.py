@@ -12,6 +12,7 @@ from .messages import (
     get_addressbook_contacts,
     get_cached_contacts,
     get_contact_name,
+    get_message_history_page,
     get_recent_messages,
     normalize_phone_number,
     query_addressbook_db,
@@ -21,6 +22,7 @@ from .messages import (
 
 __all__ = [
     "get_recent_messages",
+    "get_message_history_page",
     "send_message",
     "query_messages_db",
     "get_contact_name",
@@ -36,4 +38,4 @@ __all__ = [
     "fuzzy_search_messages",
 ]
 
-__version__ = "0.9.3+jrr.1"
+__version__ = "0.9.3+jrr.2"

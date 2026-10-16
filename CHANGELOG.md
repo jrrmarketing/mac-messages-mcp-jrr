@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.3+jrr.2] - 2026-10-16
+
+### Added
+- Added `tool_get_message_history_page` for exact phone or email history with structured, bounded, snapshot-bound pagination.
+- Added explicit coverage, cursor, matched-handle, freshness, and message-count metadata for downstream completeness checks.
+
+### Fixed
+- Source changes, malformed or stale continuations, database failures, and histories above the safety bound now fail closed instead of appearing complete.
+
 ## [0.9.2] - 2026-05-10
 
 ### Added

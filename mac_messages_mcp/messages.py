@@ -2,8 +2,10 @@
 Core functionality for interacting with macOS Messages app
 """
 
+import base64
 import difflib
 import glob
+import hashlib
 import json
 import os
 import re
@@ -237,6 +239,8 @@ _EMOJI_PATTERN = re.compile(
 
 _CONTROL_CHARS_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _MAX_MESSAGE_BODY_CHARS = 4_000
+_MAX_STRUCTURED_HISTORY_ROWS = 10_000
+_STRUCTURED_HISTORY_CURSOR_PREFIX = "jrrmsg1:"
 
 
 def _clean_text(text: str, strip_punctuation: bool = False) -> str:
@@ -1224,6 +1228,234 @@ def get_recent_messages(
         return "No messages found in the specified time period."
 
     return "\n".join(formatted_messages)
+
+
+def _history_message(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Return one source-complete, JSON-safe Messages row."""
+    body = row.get("text")
+    if body is None and row.get("attributedBody") is not None:
+        body = extract_body_from_attributed(row.get("attributedBody"))
+    body = _sanitize_message_body(body or "")
+    try:
+        observed_at = _from_apple_ns(int(row["date"])).astimezone(timezone.utc)
+    except (KeyError, TypeError, ValueError, OverflowError) as error:
+        raise ValueError("MESSAGES_DATE_INVALID") from error
+    handle = str(row.get("handle") or "").strip()
+    if not handle:
+        raise ValueError("MESSAGES_HANDLE_MISSING")
+    row_id = row.get("ROWID")
+    handle_id = row.get("handle_id")
+    if row_id is None or handle_id is None:
+        raise ValueError("MESSAGES_ROW_INVALID")
+    try:
+        normalized_row_id = int(row_id)
+        normalized_handle_id = int(handle_id)
+    except (TypeError, ValueError) as error:
+        raise ValueError("MESSAGES_ROW_INVALID") from error
+    return {
+        "id": str(normalized_row_id),
+        "date": observed_at.isoformat().replace("+00:00", "Z"),
+        "apple_date": str(row["date"]),
+        "text": body,
+        "direction": "outbound" if bool(row.get("is_from_me")) else "inbound",
+        "is_from_me": bool(row.get("is_from_me")),
+        "handle_id": normalized_handle_id,
+        "handle": handle,
+        "service": str(row.get("service") or "unknown"),
+        "attachments": [],
+    }
+
+
+def _history_snapshot(
+    messages: List[Dict[str, Any]], searched_identity: str, resolved_handles: List[str]
+) -> str:
+    material = {
+        "searched_identity": searched_identity,
+        "resolved_handles": sorted(set(resolved_handles)),
+        "messages": [
+            {
+                "id": message["id"],
+                "apple_date": message["apple_date"],
+                "text": message["text"],
+                "direction": message["direction"],
+                "handle_id": message["handle_id"],
+                "handle": message["handle"],
+                "service": message["service"],
+            }
+            for message in messages
+        ],
+    }
+    return hashlib.sha256(
+        json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _encode_history_cursor(offset: int, snapshot: str, identity: str) -> str:
+    value = json.dumps(
+        {"offset": offset, "snapshot": snapshot, "identity": identity},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return _STRUCTURED_HISTORY_CURSOR_PREFIX + base64.urlsafe_b64encode(value).decode(
+        "ascii"
+    ).rstrip("=")
+
+
+def _decode_history_cursor(cursor: str) -> Dict[str, Any]:
+    if not isinstance(cursor, str) or not cursor.startswith(
+        _STRUCTURED_HISTORY_CURSOR_PREFIX
+    ):
+        raise ValueError("MESSAGES_CURSOR_INVALID")
+    try:
+        encoded = cursor[len(_STRUCTURED_HISTORY_CURSOR_PREFIX) :]
+        encoded += "=" * (-len(encoded) % 4)
+        value = json.loads(base64.urlsafe_b64decode(encoded).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("MESSAGES_CURSOR_INVALID") from error
+    if (
+        not isinstance(value, dict)
+        or not isinstance(value.get("offset"), int)
+        or value["offset"] <= 0
+        or not isinstance(value.get("snapshot"), str)
+        or not re.fullmatch(r"[a-f\d]{64}", value["snapshot"])
+        or not isinstance(value.get("identity"), str)
+        or not value["identity"]
+    ):
+        raise ValueError("MESSAGES_CURSOR_INVALID")
+    return value
+
+
+def paginate_message_rows(
+    rows: List[Dict[str, Any]],
+    *,
+    searched_identity: str,
+    resolved_handles: List[str],
+    limit: int = 100,
+    cursor: Optional[str] = None,
+    snapshot: Optional[str] = None,
+    checked_at: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Page one exact identity's Messages rows under a content-bound snapshot."""
+    if not isinstance(limit, int) or limit < 1 or limit > 100:
+        raise ValueError("MESSAGES_LIMIT_INVALID")
+    if snapshot and not cursor:
+        raise ValueError("MESSAGES_SNAPSHOT_WITHOUT_CURSOR")
+    if cursor and not snapshot:
+        raise ValueError("MESSAGES_SNAPSHOT_REQUIRED")
+    if len(rows) > _MAX_STRUCTURED_HISTORY_ROWS:
+        raise ValueError("MESSAGES_HISTORY_LIMIT_REACHED")
+
+    messages = [_history_message(row) for row in rows]
+    messages.sort(
+        key=lambda item: (int(item["apple_date"]), int(item["id"])), reverse=True
+    )
+    current_snapshot = _history_snapshot(messages, searched_identity, resolved_handles)
+    offset = 0
+    if cursor:
+        state = _decode_history_cursor(cursor)
+        if state["identity"] != searched_identity:
+            raise ValueError("MESSAGES_CURSOR_IDENTITY_MISMATCH")
+        if snapshot != state["snapshot"] or snapshot != current_snapshot:
+            raise ValueError("MESSAGES_HISTORY_CHANGED_RESTART")
+        offset = state["offset"]
+        if offset >= len(messages):
+            raise ValueError("MESSAGES_CURSOR_OUT_OF_RANGE")
+
+    page_messages = messages[offset : offset + limit]
+    next_offset = offset + len(page_messages)
+    next_cursor = (
+        _encode_history_cursor(next_offset, current_snapshot, searched_identity)
+        if next_offset < len(messages)
+        else None
+    )
+    observed_at = checked_at or datetime.now(timezone.utc)
+    return {
+        "schema": "jrr-messages-history-v1",
+        "searched_identity": searched_identity,
+        "resolved_handles": sorted(set(resolved_handles)),
+        "snapshot": current_snapshot,
+        "checked_at": observed_at.astimezone(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "page_complete": True,
+        "coverage_complete": next_cursor is None,
+        "next_cursor": next_cursor,
+        "message_count": len(messages),
+        "returned_count": len(page_messages),
+        "offset": offset,
+        "messages": page_messages,
+        "coverage": {
+            "scope": "exact_handle_messages_within_requested_window",
+            "attachment_content_loaded": False,
+            "source_limit": _MAX_STRUCTURED_HISTORY_ROWS,
+        },
+    }
+
+
+def get_message_history_page(
+    hours: int = 24,
+    contact: Optional[str] = None,
+    limit: int = 100,
+    cursor: Optional[str] = None,
+    snapshot: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return one structured, snapshot-bound page for an exact phone or email."""
+    if hours < 0 or hours > 10 * 365 * 24:
+        raise ValueError("MESSAGES_HOURS_INVALID")
+    identity = str(contact or "").strip()
+    if not identity or ("@" not in identity and not _looks_like_phone_input(identity)):
+        raise ValueError("MESSAGES_EXACT_IDENTITY_REQUIRED")
+
+    if "@" in identity:
+        handle_rows = query_messages_db(
+            "SELECT ROWID, id FROM handle WHERE lower(id) = lower(?)", (identity,)
+        )
+    else:
+        normalized = normalize_phone_number(identity)
+        formats_to_try = _get_phone_formats(normalized)
+        placeholders = ", ".join(["?" for _ in formats_to_try])
+        handle_rows = query_messages_db(
+            f"SELECT ROWID, id FROM handle WHERE id IN ({placeholders})",
+            tuple(formats_to_try),
+        )
+    if handle_rows and "error" in handle_rows[0]:
+        raise ValueError("MESSAGES_DATABASE_UNAVAILABLE")
+    handle_rows = [row for row in handle_rows if row.get("ROWID") is not None and row.get("id")]
+    resolved_handles = [str(row["id"]) for row in handle_rows]
+    if not handle_rows:
+        return paginate_message_rows(
+            [],
+            searched_identity=identity,
+            resolved_handles=[],
+            limit=limit,
+            cursor=cursor,
+            snapshot=snapshot,
+        )
+
+    hours_ago = datetime.now(timezone.utc) - timedelta(hours=hours)
+    timestamp_str = str(_to_apple_ns(hours_ago))
+    handle_ids = [int(row["ROWID"]) for row in handle_rows]
+    placeholders = ", ".join(["?" for _ in handle_ids])
+    query = f"""
+    SELECT m.ROWID, m.date, m.text, m.attributedBody, m.is_from_me,
+           m.handle_id, m.service, m.cache_roomnames, h.id AS handle
+    FROM message m
+    JOIN handle h ON h.ROWID = m.handle_id
+    WHERE CAST(m.date AS TEXT) > ? AND m.handle_id IN ({placeholders})
+    ORDER BY m.date DESC, m.ROWID DESC
+    LIMIT {_MAX_STRUCTURED_HISTORY_ROWS + 1}
+    """
+    rows = query_messages_db(query, tuple([timestamp_str, *handle_ids]))
+    if rows and "error" in rows[0]:
+        raise ValueError("MESSAGES_DATABASE_UNAVAILABLE")
+    return paginate_message_rows(
+        rows,
+        searched_identity=identity,
+        resolved_handles=resolved_handles,
+        limit=limit,
+        cursor=cursor,
+        snapshot=snapshot,
+    )
 
 
 # Initialize the static variable for recent matches

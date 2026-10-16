@@ -20,6 +20,7 @@ from mac_messages_mcp.messages import (
     fuzzy_search_messages,
     get_attachment,
     get_cached_contacts,
+    get_message_history_page,
     get_recent_messages,
     query_messages_db,
     search_attachments,
@@ -39,6 +40,40 @@ logger = logging.getLogger("mac_messages_mcp")
 mcp = FastMCP(
     "MessageBridge", instructions="A bridge for interacting with macOS Messages app"
 )
+
+
+@mcp.tool()
+def tool_get_message_history_page(
+    ctx: Context,
+    contact: Annotated[
+        str,
+        Field(description="Exact phone number or email address. Names and fuzzy contact selectors are rejected."),
+    ],
+    hours: Annotated[
+        int,
+        Field(description="Bounded lookback in hours, up to ten years."),
+    ] = 24,
+    limit: Annotated[
+        int,
+        Field(description="Messages per page, from 1 to 100."),
+    ] = 100,
+    cursor: Annotated[
+        str | None,
+        Field(description="Opaque next_cursor from the preceding page, passed back unchanged."),
+    ] = None,
+    snapshot: Annotated[
+        str | None,
+        Field(description="Snapshot from the first page, required with every continuation."),
+    ] = None,
+) -> dict:
+    """Read one structured exact-identity Messages page without sending or editing."""
+    return get_message_history_page(
+        hours=hours,
+        contact=str(contact),
+        limit=limit,
+        cursor=cursor,
+        snapshot=snapshot,
+    )
 
 
 @mcp.tool()
