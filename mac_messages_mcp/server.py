@@ -72,7 +72,12 @@ def tool_get_message_history_page(
         ),
     ] = None,
 ) -> dict:
-    """Read one structured exact-identity Messages page without sending or editing."""
+    """Read one structured exact-identity Messages page without sending or editing.
+
+    The stable snapshot includes attachment inventory and content hashes. Only
+    bounded UTF-8 text attachments include readable content; media and unresolved
+    files remain explicit review-required states rather than inferred instructions.
+    """
     return get_message_history_page(
         hours=hours,
         contact=str(contact),

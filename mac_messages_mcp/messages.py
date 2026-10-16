@@ -7,6 +7,7 @@ import difflib
 import glob
 import hashlib
 import json
+import mimetypes
 import os
 import re
 import sqlite3
@@ -241,6 +242,17 @@ _CONTROL_CHARS_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _MAX_MESSAGE_BODY_CHARS = 4_000
 _MAX_STRUCTURED_HISTORY_ROWS = 10_000
 _STRUCTURED_HISTORY_CURSOR_PREFIX = "jrrmsg1:"
+_ATTACHMENT_QUERY_CHUNK_SIZE = 500
+_MAX_STRUCTURED_ATTACHMENTS = 1_000
+_MAX_STRUCTURED_ATTACHMENT_BYTES = 25_000_000
+_MAX_STRUCTURED_ATTACHMENT_TEXT_BYTES = 64_000
+_MAX_STRUCTURED_ATTACHMENT_TEXT_TOTAL_BYTES = 512_000
+_STRUCTURED_TEXT_MIMES = {
+    "application/json",
+    "application/xml",
+    "application/x-yaml",
+    "application/yaml",
+}
 
 
 def _clean_text(text: str, strip_punctuation: bool = False) -> str:
@@ -1232,7 +1244,130 @@ def get_recent_messages(
     return "\n".join(formatted_messages)
 
 
-def _history_message(row: Dict[str, Any]) -> Dict[str, Any]:
+def _normalise_attachment_mime(value: Any) -> str:
+    mime = str(value or "").strip().lower()
+    return {
+        "image/jpg": "image/jpeg",
+        "audio/x-m4a": "audio/mp4",
+        "audio/mp4a-latm": "audio/mp4",
+    }.get(mime, mime)
+
+
+def _structured_attachment(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Bind safe attachment evidence to one message without exposing file paths."""
+    try:
+        attachment_id = int(row["id"])
+        message_id = int(row["message_id"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("MESSAGES_ATTACHMENT_IDENTITY_INVALID") from error
+    if attachment_id <= 0 or message_id <= 0:
+        raise ValueError("MESSAGES_ATTACHMENT_IDENTITY_INVALID")
+
+    filename = str(row.get("filename") or "").strip() or None
+    path = str(row.get("path") or "").strip() or None
+    mime = _normalise_attachment_mime(row.get("mime_type"))
+    guessed_mime = _normalise_attachment_mime(mimetypes.guess_type(filename or "")[0])
+    evidence = {
+        "id": str(attachment_id),
+        "message_id": str(message_id),
+        "filename": filename,
+        "mime_type": mime or None,
+        "uti": str(row.get("uti") or "").strip() or None,
+        "size_bytes": 0,
+        "content_state": "missing",
+        "content_sha256": None,
+        "content_text": None,
+    }
+    if not path or not os.path.exists(path):
+        return evidence
+
+    try:
+        initial_stat = os.stat(path)
+    except OSError:
+        return evidence
+    evidence["size_bytes"] = initial_stat.st_size
+    if initial_stat.st_size > _MAX_STRUCTURED_ATTACHMENT_BYTES:
+        evidence["content_state"] = "oversized"
+        return evidence
+
+    digest = hashlib.sha256()
+    content = (
+        bytearray()
+        if initial_stat.st_size <= _MAX_STRUCTURED_ATTACHMENT_TEXT_BYTES
+        else None
+    )
+    try:
+        with open(path, "rb") as handle:
+            while chunk := handle.read(64 * 1024):
+                digest.update(chunk)
+                if content is not None:
+                    content.extend(chunk)
+        final_stat = os.stat(path)
+    except OSError:
+        evidence["content_state"] = "unreadable"
+        return evidence
+    if any(
+        getattr(final_stat, field) != getattr(initial_stat, field)
+        for field in ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    ):
+        raise ValueError("MESSAGES_ATTACHMENT_CHANGED_RESTART")
+
+    evidence["content_sha256"] = digest.hexdigest()
+    generic_mimes = {"", "application/octet-stream", "binary/octet-stream"}
+    if mime not in generic_mimes and guessed_mime and mime != guessed_mime:
+        evidence["content_state"] = "mime_mismatch"
+        return evidence
+
+    is_text = mime.startswith("text/") or mime in _STRUCTURED_TEXT_MIMES
+    if not is_text:
+        evidence["content_state"] = "review_required"
+        return evidence
+    if content is None:
+        evidence["content_state"] = "oversized"
+        return evidence
+    try:
+        text = bytes(content).decode("utf-8")
+    except UnicodeDecodeError:
+        evidence["content_state"] = "unreadable"
+        return evidence
+    evidence["content_state"] = "readable_text"
+    evidence["content_text"] = _CONTROL_CHARS_PATTERN.sub("", text)
+    return evidence
+
+
+def _structured_attachments_for_message_ids(
+    message_ids: List[int],
+) -> Dict[int, List[Dict[str, Any]]]:
+    """Load bounded attachment evidence without exceeding SQLite bind limits."""
+    structured: Dict[int, List[Dict[str, Any]]] = {}
+    attachment_count = 0
+    readable_text_bytes = 0
+    for offset in range(0, len(message_ids), _ATTACHMENT_QUERY_CHUNK_SIZE):
+        grouped = _attachments_for_message_ids(
+            message_ids[offset : offset + _ATTACHMENT_QUERY_CHUNK_SIZE],
+            strict=True,
+        )
+        for message_id, attachments in grouped.items():
+            converted = [
+                _structured_attachment(attachment) for attachment in attachments
+            ]
+            attachment_count += len(converted)
+            if attachment_count > _MAX_STRUCTURED_ATTACHMENTS:
+                raise ValueError("MESSAGES_ATTACHMENT_LIMIT_REACHED")
+            readable_text_bytes += sum(
+                len(str(attachment.get("content_text") or "").encode("utf-8"))
+                for attachment in converted
+                if attachment.get("content_state") == "readable_text"
+            )
+            if readable_text_bytes > _MAX_STRUCTURED_ATTACHMENT_TEXT_TOTAL_BYTES:
+                raise ValueError("MESSAGES_ATTACHMENT_TEXT_LIMIT_REACHED")
+            structured.setdefault(int(message_id), []).extend(converted)
+    return structured
+
+
+def _history_message(
+    row: Dict[str, Any], attachments: Optional[List[Dict[str, Any]]] = None
+) -> Dict[str, Any]:
     """Return one source-complete, JSON-safe Messages row."""
     body = row.get("text")
     if body is None and row.get("attributedBody") is not None:
@@ -1264,7 +1399,7 @@ def _history_message(row: Dict[str, Any]) -> Dict[str, Any]:
         "handle_id": normalized_handle_id,
         "handle": handle,
         "service": str(row.get("service") or "unknown"),
-        "attachments": [],
+        "attachments": list(attachments or []),
     }
 
 
@@ -1283,6 +1418,7 @@ def _history_snapshot(
                 "handle_id": message["handle_id"],
                 "handle": message["handle"],
                 "service": message["service"],
+                "attachments": message["attachments"],
             }
             for message in messages
         ],
@@ -1336,6 +1472,7 @@ def paginate_message_rows(
     cursor: Optional[str] = None,
     snapshot: Optional[str] = None,
     checked_at: Optional[datetime] = None,
+    attachments_by_message: Optional[Dict[int, List[Dict[str, Any]]]] = None,
 ) -> Dict[str, Any]:
     """Page one exact identity's Messages rows under a content-bound snapshot."""
     if not isinstance(limit, int) or limit < 1 or limit > 100:
@@ -1347,7 +1484,34 @@ def paginate_message_rows(
     if len(rows) > _MAX_STRUCTURED_HISTORY_ROWS:
         raise ValueError("MESSAGES_HISTORY_LIMIT_REACHED")
 
-    messages = [_history_message(row) for row in rows]
+    attachment_map = attachments_by_message or {}
+    messages = [
+        _history_message(
+            row,
+            attachment_map.get(int(row["ROWID"]), []),
+        )
+        for row in rows
+    ]
+    seen_attachments: Dict[str, str] = {}
+    attachment_states: Dict[str, int] = {}
+    for message in messages:
+        unique = []
+        for attachment in message["attachments"]:
+            if str(attachment.get("message_id")) != message["id"]:
+                raise ValueError("MESSAGES_ATTACHMENT_IDENTITY_CONFLICT")
+            attachment_id = str(attachment.get("id") or "")
+            if not attachment_id:
+                raise ValueError("MESSAGES_ATTACHMENT_IDENTITY_INVALID")
+            signature = json.dumps(attachment, sort_keys=True, separators=(",", ":"))
+            if attachment_id in seen_attachments:
+                if seen_attachments[attachment_id] != signature:
+                    raise ValueError("MESSAGES_ATTACHMENT_IDENTITY_CONFLICT")
+                continue
+            seen_attachments[attachment_id] = signature
+            state = str(attachment.get("content_state") or "unknown")
+            attachment_states[state] = attachment_states.get(state, 0) + 1
+            unique.append(attachment)
+        message["attachments"] = unique
     messages.sort(
         key=lambda item: (int(item["apple_date"]), int(item["id"])), reverse=True
     )
@@ -1371,6 +1535,9 @@ def paginate_message_rows(
         else None
     )
     observed_at = checked_at or datetime.now(timezone.utc)
+    attachment_content_complete = all(
+        state == "readable_text" for state in attachment_states
+    )
     return {
         "schema": "jrr-messages-history-v1",
         "searched_identity": searched_identity,
@@ -1383,12 +1550,19 @@ def paginate_message_rows(
         "coverage_complete": next_cursor is None,
         "next_cursor": next_cursor,
         "message_count": len(messages),
+        "attachment_count": len(seen_attachments),
+        "attachment_content_complete": attachment_content_complete,
+        "attachment_states": attachment_states,
         "returned_count": len(page_messages),
         "offset": offset,
         "messages": page_messages,
         "coverage": {
             "scope": "exact_handle_messages_within_requested_window",
-            "attachment_content_loaded": False,
+            "attachment_content_loaded": attachment_content_complete,
+            "attachment_content_limit_bytes": _MAX_STRUCTURED_ATTACHMENT_BYTES,
+            "attachment_text_limit_bytes": _MAX_STRUCTURED_ATTACHMENT_TEXT_BYTES,
+            "attachment_text_total_limit_bytes": _MAX_STRUCTURED_ATTACHMENT_TEXT_TOTAL_BYTES,
+            "attachment_count_limit": _MAX_STRUCTURED_ATTACHMENTS,
             "source_limit": _MAX_STRUCTURED_HISTORY_ROWS,
         },
     }
@@ -1452,6 +1626,8 @@ def get_message_history_page(
     rows = query_messages_db(query, tuple([timestamp_str, *handle_ids]))
     if rows and "error" in rows[0]:
         raise ValueError("MESSAGES_DATABASE_UNAVAILABLE")
+    message_ids = [int(row["ROWID"]) for row in rows]
+    attachments_by_message = _structured_attachments_for_message_ids(message_ids)
     return paginate_message_rows(
         rows,
         searched_identity=identity,
@@ -1459,6 +1635,7 @@ def get_message_history_page(
         limit=limit,
         cursor=cursor,
         snapshot=snapshot,
+        attachments_by_message=attachments_by_message,
     )
 
 
@@ -2285,6 +2462,7 @@ def _format_attachment_summary(attachments: List[Dict[str, Any]]) -> str:
 
 def _attachments_for_message_ids(
     message_ids: List[int],
+    strict: bool = False,
 ) -> Dict[int, List[Dict[str, Any]]]:
     """For a list of message ROWIDs, return a dict mapping each message id
     that has attachments to a list of attachment metadata dicts. Messages
@@ -2306,6 +2484,8 @@ def _attachments_for_message_ids(
     """
     rows = query_messages_db(query, tuple(message_ids))
     if rows and "error" in rows[0]:
+        if strict:
+            raise ValueError("MESSAGES_ATTACHMENT_DATABASE_UNAVAILABLE")
         return {}
 
     # Drop rows that don't look like attachment-join rows. Two reasons to

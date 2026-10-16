@@ -53,6 +53,8 @@ Stickers, link-preview "balloon" payloads, and `.pluginPayloadAttachment` contai
 
 For automation that must prove complete coverage, use `tool_get_message_history_page` with an exact phone number or email. Pass each returned `next_cursor` and `snapshot` back unchanged until `coverage_complete` is true. Repeated, malformed, stale, or source-changed continuations fail instead of being treated as empty history.
 
+Structured history also inventories every attachment under the same snapshot. Bounded UTF-8 text attachments include `content_text`; image, audio, PDF, video, missing, oversized, unreadable, or MIME-mismatched files report an explicit `content_state` and keep `attachment_content_complete` false. Metadata such as a filename is never treated as readable message content. Use the attachment tools and a trusted media-inspection workflow when those files need human or model review.
+
 ### Recipient formats
 
 For direct sends, E.164 phone numbers with a leading `+` are the most reliable format, such as `+14155551234`. Bare digit phone numbers with a country code are normalized before sending, and 10-digit US numbers are sent as `+1...`. `tool_find_contact` returns phone matches in the same send-ready format.

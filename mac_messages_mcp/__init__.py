@@ -38,4 +38,4 @@ __all__ = [
     "fuzzy_search_messages",
 ]
 
-__version__ = "0.9.3+jrr.2"
+__version__ = "0.9.3+jrr.3"
